@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+
+# 虚拟环境
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# 日志与脚本产物
+*.log
+before_sign.png
+after_sign.png

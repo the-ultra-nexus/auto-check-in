@@ -1,0 +1,13 @@
+# 第三方依赖(notify.py / sijishe.py 所需)
+# 版本已固定为 2026-08-06 uv 解析出的兼容版本
+requests==2.34.2
+lxml==6.1.1
+urllib3==2.7.0
+ddddocr==1.6.1
+selenium==4.46.0
+
+# 固定 opencv 版本（Intel Mac 无 5.x 预编译包，源码编译太慢）
+opencv-python==4.11.0.86
+
+# 固定 onnxruntime（新版 1.28+ 不再提供 Intel Mac x86_64 包）
+onnxruntime==1.23.2

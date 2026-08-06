@@ -1,0 +1,17 @@
+[project]
+name = "auto-check-in"
+version = "0.1.0"
+description = "自动签到脚本"
+authors = [
+    { name = "ultra-nexus", email = "ultra-nexus@outlook.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "ddddocr>=1.6.1",
+    "lxml>=6.1.1",
+    "onnxruntime==1.23.2",
+    "opencv-python==4.11.0.86",
+    "requests>=2.34.2",
+    "selenium>=4.46.0",
+    "urllib3>=2.7.0",
+]
