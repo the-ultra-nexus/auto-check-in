@@ -1,0 +1,23 @@
+schema: spec-driven
+
+context: |
+  Project: Auto Check In is a Python 3.12 automation script for the 司机社 site.
+  Runtime: requests, lxml, Selenium, ddddocr, OpenCV, and onnxruntime.
+  Entry point: the auto_check_in package via `uv run auto-check-in`.
+  Notification delivery is provided by auto_check_in.notify.
+  Credentials and notification tokens must be supplied through environment variables;
+  never place real credentials, cookies, API tokens, or captured CAPTCHA images in the repository.
+  The external site and browser driver are integration boundaries. Changes must keep
+  network interactions time-bounded and make failure outcomes observable in the
+  notification content.
+  Preserve compatibility with the existing scheduler/function entry point unless a
+  change explicitly migrates it. Add focused automated tests for logic that can be
+  isolated from the live site; live sign-in remains a manual integration check.
+
+rules:
+  proposal:
+    - State behavior changes, external-site assumptions, credential handling, and non-goals.
+  design:
+    - Identify Selenium, OCR, network, scheduler, and notification effects.
+  tasks:
+    - Include automated verification where feasible and a manual integration verification step when site behavior changes.

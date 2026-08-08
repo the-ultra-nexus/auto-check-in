@@ -15,3 +15,12 @@ venv/
 *.log
 before_sign.png
 after_sign.png
+*.png
+.runtime/
+
+# Local configuration and secrets
+.env
+.env.*
+config/local.toml
+config/*.secret.toml
+network-requests-*.json
