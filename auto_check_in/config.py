@@ -35,7 +35,7 @@ class NetworkConfig:
     retries: int = 3
     retry_delay_seconds: float = 3.0
     request_delay_seconds: float = 3.0
-    proxy_urls: tuple[str, ...] = ()
+    proxy_pool_urls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +46,7 @@ class SiteConfig:
     accounts: str
     sign_path: str = "/k_misign-sign.html"
     network: NetworkConfig = NetworkConfig()
+    direct_first: bool = True
     session_cache: bool = True
     session_dir: Path = Path(".runtime/sessions")
     session_max_age_seconds: float = 0.0
@@ -115,8 +116,8 @@ def parse_accounts(payload: str | None) -> tuple[Account, ...]:
     return tuple(accounts)
 
 
-def parse_proxy_urls(payload: str | None) -> tuple[str, ...]:
-    """Parse a comma-separated HTTP(S) proxy URL list without logging the payload."""
+def parse_pool_urls(payload: str | None) -> tuple[str, ...]:
+    """Parse a comma-separated HTTP(S) proxy pool URL list without logging the payload."""
     if not payload or not payload.strip():
         return ()
     proxies: list[str] = []
@@ -137,7 +138,7 @@ def parse_proxy_urls(payload: str | None) -> tuple[str, ...]:
 def _network_from(
     raw: Mapping[str, object],
     env: Mapping[str, str],
-    proxy_urls: tuple[str, ...] = (),
+    proxy_pool_urls: tuple[str, ...] = (),
 ) -> NetworkConfig:
     network = NetworkConfig(
         request_timeout_seconds=_positive_int(
@@ -154,8 +155,10 @@ def _network_from(
         request_delay_seconds=float(
             _env(env, "CHECK_IN_REQUEST_DELAY", str(raw.get("request_delay_seconds", 3.0)))
         ),
-        proxy_urls=proxy_urls,
+        proxy_pool_urls=proxy_pool_urls,
     )
+    if network.retry_delay_seconds < 0:
+        raise ConfigError("CHECK_IN_RETRY_DELAY 不能为负数")
     if network.request_delay_seconds < 0:
         raise ConfigError("CHECK_IN_REQUEST_DELAY 不能为负数")
     return network
@@ -182,11 +185,12 @@ def load_config(
     _warn_unknown("notification", notification_raw, _NOTIFICATION_KEYS)
     global_network_raw = raw.get("network", {}) if isinstance(raw.get("network"), dict) else {}
     _warn_unknown("network", global_network_raw, _NETWORK_KEYS)
-    if "proxy_urls" in global_network_raw:
+    if "proxy_urls" in global_network_raw or "proxy_pool_urls" in global_network_raw:
         raise ConfigError(
-            "代理地址不允许写入配置文件（检测到 [network] proxy_urls），"
-            "请使用 CHECK_IN_PROXY_URLS / SITE_<NAME>_PROXY_URLS 环境变量/Secret 提供"
+            "代理池地址不允许写入配置文件（检测到 [network] proxy_urls / proxy_pool_urls），"
+            "请使用 CHECK_IN_PROXY_POOL_URLS 环境变量/Secret 提供"
         )
+    pool_urls = parse_pool_urls(_env(env, "CHECK_IN_PROXY_POOL_URLS", ""))
     site_configs: dict[str, dict] = {}
     site_configs_raw = _env(env, "SITE_CONFIGS", "")
     if site_configs_raw:
@@ -260,17 +264,28 @@ def load_config(
                 raise ConfigError(f"站点 {name} 缺少 base_url，请配置 {prefix}BASE_URL")
             if not accounts:
                 raise ConfigError(f"站点 {name} 缺少账号凭据，请配置 {prefix}ACCOUNTS")
-            sign_path = str(json_cfg.get("sign_path") or section.get("sign_path", "/k_misign-sign.html"))
+            sign_path = _env(
+                env,
+                f"{prefix}SIGN_PATH",
+                str(json_cfg.get("sign_path") or section.get("sign_path", "/k_misign-sign.html")),
+            )
             site_network_raw = section.get("network", {}) if isinstance(section.get("network"), dict) else {}
             _warn_unknown(f"sites.{name}.network", site_network_raw, _NETWORK_KEYS)
-            if "proxy_urls" in site_network_raw:
+            if "proxy_urls" in site_network_raw or "proxy_pool_urls" in site_network_raw:
                 raise ConfigError(
-                    f"站点 {name} 的代理地址不允许写入配置文件（检测到 sites.{name}.network.proxy_urls），"
-                    f"请使用 {prefix}PROXY_URLS 环境变量/Secret 提供"
+                    f"站点 {name} 的代理池地址不允许写入配置文件"
+                    f"（检测到 sites.{name}.network.proxy_urls / proxy_pool_urls），"
+                    f"请使用 CHECK_IN_PROXY_POOL_URLS 环境变量/Secret 提供"
+                )
+            if "direct_first" in section:
+                raise ConfigError(
+                    f"站点 {name} 的 direct_first 不允许写入配置文件（检测到 sites.{name}.direct_first），"
+                    f"请使用 {prefix}DIRECT_FIRST 环境变量或 SITE_CONFIGS 的 direct_first 字段提供"
                 )
             merged_network = {**global_network_raw, **site_network_raw}
-            proxy_urls = parse_proxy_urls(
-                _env(env, f"{prefix}PROXY_URLS", _env(env, "CHECK_IN_PROXY_URLS", ""))
+            direct_first = _bool(
+                _env(env, f"{prefix}DIRECT_FIRST", str(json_cfg.get("direct_first", True))),
+                f"{prefix}DIRECT_FIRST",
             )
             sites.append(
                 SiteConfig(
@@ -279,7 +294,8 @@ def load_config(
                     base_url=base_url,
                     accounts=accounts,
                     sign_path=sign_path,
-                    network=_network_from(merged_network, env, proxy_urls),
+                    network=_network_from(merged_network, env, pool_urls),
+                    direct_first=direct_first,
                     session_cache=session_cache,
                     session_dir=session_dir,
                     session_max_age_seconds=session_max_age_seconds,

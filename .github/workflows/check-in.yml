@@ -23,6 +23,8 @@ jobs:
       # CHECK_IN_SITES 优先取手动输入，其次仓库变量（留空则运行 SITE_CONFIGS 全部站点）
       CHECK_IN_SITES: ${{ inputs.sites || vars.CHECK_IN_SITES }}
       SITE_CONFIGS: ${{ secrets.SITE_CONFIGS }}
+      # 代理（IP 池，逗号分隔多个池 URL；按需分批补给，按需配置对应 Secret）
+      CHECK_IN_PROXY_POOL_URLS: ${{ secrets.CHECK_IN_PROXY_POOL_URLS }}
       # 通知渠道（按需配置对应 Secrets）
       BARK_PUSH: ${{ secrets.BARK_PUSH }}
       PUSH_KEY: ${{ secrets.PUSH_KEY }}
@@ -53,6 +55,9 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked
+
+      - name: Verify env coverage
+        run: uv run python -m unittest tests.test_github_workflow -v
 
       - name: Restore session cache
         uses: actions/cache/restore@v4

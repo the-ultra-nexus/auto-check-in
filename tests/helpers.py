@@ -10,7 +10,7 @@ from auto_check_in.config import SiteConfig
 DIALOG = """<?xml version="1.0" encoding="utf-8"?><root><![CDATA[
 <form id="loginform_X" action="member.php?mod=logging&amp;action=login&amp;loginsubmit=yes&amp;handlekey=login&amp;loginhash=Ab12" onsubmit="return false;">
 <input type="hidden" name="formhash" value="abc123" />
-<input type="hidden" name="referer" value="https://xsijishe.net/k_misign-sign.html" />
+<input type="hidden" name="referer" value="https://site.example/k_misign-sign.html" />
 <input type="text" name="username" />
 <input type="password" name="password" />
 <select name="questionid"><option value="0">无</option></select>
@@ -117,7 +117,7 @@ def write_config(text: str) -> Path:
 def make_site_config(
     name: str = "sijishe",
     adapter: str = "sijishe",
-    base_url: str = "https://xsijishe.net",
+    base_url: str = "https://site.example",
     accounts: str = "alice&pw",
     **overrides,
 ) -> SiteConfig:

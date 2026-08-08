@@ -17,7 +17,7 @@ from auto_check_in.config import (
     SiteConfig,
     load_config,
     parse_accounts,
-    parse_proxy_urls,
+    parse_pool_urls,
 )
 from auto_check_in.discuz import (
     classify_discuz_response,
@@ -137,6 +137,33 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(config.sites[0].base_url, "https://env.example")
 
+    def test_sign_path_env_overrides_site_configs(self):
+        path = write_config("")
+        config = load_config(
+            path,
+            {
+                "CHECK_IN_SITES": "sijishe",
+                "SITE_CONFIGS": json.dumps(
+                    {"sijishe": {"base_url": "https://a.example", "accounts": "u&p", "sign_path": "/json-sign.html"}}
+                ),
+                "SITE_SIJISHE_SIGN_PATH": "/env-sign.html",
+            },
+        )
+        self.assertEqual(config.sites[0].sign_path, "/env-sign.html")
+
+    def test_negative_retry_delay_rejected(self):
+        path = write_config("")
+        with self.assertRaises(ConfigError):
+            load_config(
+                path,
+                {
+                    "CHECK_IN_SITES": "sijishe",
+                    "SITE_SIJISHE_BASE_URL": "https://a.example",
+                    "SITE_SIJISHE_ACCOUNTS": "u&p",
+                    "CHECK_IN_RETRY_DELAY": "-1",
+                },
+            )
+
     def test_request_delay_default_and_env(self):
         path = write_config("[network]\nrequest_delay_seconds = 3.0\n")
         base = {
@@ -217,7 +244,7 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("SITE_SIJISHE_ACCOUNTS", message)
         self.assertIn("SITE_CONFIGS", message)
 
-    def test_global_proxy_urls_parsed(self):
+    def test_global_pool_urls_parsed(self):
         path = write_config("")
         config = load_config(
             path,
@@ -225,15 +252,15 @@ class ConfigTests(unittest.TestCase):
                 "CHECK_IN_SITES": "sijishe",
                 "SITE_SIJISHE_BASE_URL": "https://a.example",
                 "SITE_SIJISHE_ACCOUNTS": "u&p",
-                "CHECK_IN_PROXY_URLS": "http://1.2.3.4:8080,http://5.6.7.8:3128",
+                "CHECK_IN_PROXY_POOL_URLS": "https://pool.example/data.txt,https://pool2.example/list.txt",
             },
         )
         self.assertEqual(
-            config.sites[0].network.proxy_urls,
-            ("http://1.2.3.4:8080", "http://5.6.7.8:3128"),
+            config.sites[0].network.proxy_pool_urls,
+            ("https://pool.example/data.txt", "https://pool2.example/list.txt"),
         )
 
-    def test_site_proxy_overrides_global(self):
+    def test_direct_first_default_true(self):
         path = write_config("")
         config = load_config(
             path,
@@ -241,13 +268,55 @@ class ConfigTests(unittest.TestCase):
                 "CHECK_IN_SITES": "sijishe",
                 "SITE_SIJISHE_BASE_URL": "https://a.example",
                 "SITE_SIJISHE_ACCOUNTS": "u&p",
-                "CHECK_IN_PROXY_URLS": "http://1.2.3.4:8080",
-                "SITE_SIJISHE_PROXY_URLS": "http://9.9.9.9:9999",
             },
         )
-        self.assertEqual(config.sites[0].network.proxy_urls, ("http://9.9.9.9:9999",))
+        self.assertTrue(config.sites[0].direct_first)
 
-    def test_invalid_proxy_url_rejected(self):
+    def test_direct_first_from_site_configs(self):
+        path = write_config("")
+        config = load_config(
+            path,
+            {
+                "SITE_CONFIGS": json.dumps(
+                    {
+                        "sijishe": {
+                            "base_url": "https://a.example",
+                            "accounts": "u&p",
+                            "direct_first": False,
+                        }
+                    }
+                )
+            },
+        )
+        self.assertFalse(config.sites[0].direct_first)
+
+    def test_direct_first_env_overrides_site_configs(self):
+        path = write_config("")
+        config = load_config(
+            path,
+            {
+                "SITE_CONFIGS": json.dumps(
+                    {"sijishe": {"base_url": "https://a.example", "accounts": "u&p", "direct_first": False}}
+                ),
+                "SITE_SIJISHE_DIRECT_FIRST": "true",
+            },
+        )
+        self.assertTrue(config.sites[0].direct_first)
+
+    def test_direct_first_in_toml_rejected(self):
+        path = write_config(
+            "[sites.sijishe]\nbase_url = 'https://a.example'\ndirect_first = false\n"
+        )
+        with self.assertRaises(ConfigError):
+            load_config(
+                path,
+                {
+                    "CHECK_IN_SITES": "sijishe",
+                    "SITE_SIJISHE_ACCOUNTS": "u&p",
+                },
+            )
+
+    def test_invalid_pool_url_rejected(self):
         path = write_config("")
         with self.assertRaises(ConfigError):
             load_config(
@@ -256,12 +325,12 @@ class ConfigTests(unittest.TestCase):
                     "CHECK_IN_SITES": "sijishe",
                     "SITE_SIJISHE_BASE_URL": "https://a.example",
                     "SITE_SIJISHE_ACCOUNTS": "u&p",
-                    "CHECK_IN_PROXY_URLS": "ftp://1.2.3.4:21",
+                    "CHECK_IN_PROXY_POOL_URLS": "ftp://1.2.3.4:21",
                 },
             )
 
-    def test_proxy_urls_in_toml_rejected(self):
-        path = write_config("[network]\nproxy_urls = ['http://1.2.3.4:8080']\n")
+    def test_pool_urls_in_toml_rejected(self):
+        path = write_config("[network]\nproxy_pool_urls = ['https://pool.example/data.txt']\n")
         with self.assertRaises(ConfigError):
             load_config(
                 path,
@@ -272,17 +341,17 @@ class ConfigTests(unittest.TestCase):
                 },
             )
 
-    def test_parse_proxy_urls_validation(self):
-        self.assertEqual(parse_proxy_urls(None), ())
-        self.assertEqual(parse_proxy_urls("  "), ())
+    def test_parse_pool_urls_validation(self):
+        self.assertEqual(parse_pool_urls(None), ())
+        self.assertEqual(parse_pool_urls("  "), ())
         self.assertEqual(
-            parse_proxy_urls("http://u:p@1.2.3.4:8080, http://5.6.7.8:3128,,"),
-            ("http://u:p@1.2.3.4:8080", "http://5.6.7.8:3128"),
+            parse_pool_urls("https://pool.example/data.txt, https://pool2.example/list.txt,,"),
+            ("https://pool.example/data.txt", "https://pool2.example/list.txt"),
         )
         with self.assertRaises(ConfigError):
-            parse_proxy_urls("socks5://1.2.3.4:1080")
+            parse_pool_urls("socks5://1.2.3.4:1080")
         with self.assertRaises(ConfigError):
-            parse_proxy_urls("http://")
+            parse_pool_urls("https://")
 
     def test_recognition_log_emitted(self):
         path = write_config("[runtime]\nenabled_sites = ['sijishe']\n")
@@ -350,7 +419,7 @@ class DiscuzParsingTests(unittest.TestCase):
         form = parse_login_dialog(DIALOG)
         self.assertEqual(form["formhash"], "abc123")
         self.assertEqual(form["loginhash"], "Ab12")
-        self.assertTrue(form["referer"].startswith("https://xsijishe.net"))
+        self.assertTrue(form["referer"].startswith("https://site.example"))
 
     def test_parse_login_dialog_rejects_without_form(self):
         with self.assertRaises(Exception):
@@ -369,7 +438,7 @@ class DiscuzParsingTests(unittest.TestCase):
 
     def test_classify_system_error(self):
         status, _ = classify_discuz_response(
-            "<html><title>xsijishe.net - System Error</title>Discuz! System Error</html>"
+            "<html><title>site.example - System Error</title>Discuz! System Error</html>"
         )
         self.assertIs(status, CheckInStatus.LOGIN_FAILED)
 
@@ -534,7 +603,7 @@ class RedactionTests(unittest.TestCase):
         from auto_check_in.config import ConfigError
 
         try:
-            parse_proxy_urls("http://a:b@1.2.3.4:8080,socks5://u:p@9.9.9.9:9999")
+            parse_pool_urls("https://u:p@pool.example/data.txt,socks5://u:p@9.9.9.9:9999")
         except ConfigError as exc:
             redacted = redact_text(str(exc))
         self.assertIn("socks5://***@9.9.9.9:9999", redacted)
