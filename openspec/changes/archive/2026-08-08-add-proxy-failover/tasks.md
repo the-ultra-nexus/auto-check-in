@@ -17,4 +17,4 @@
 ## 3. 验证
 
 - [x] 3.1 本地 `uv run python -m unittest discover -s tests -v` 全量通过，`compileall` 通过
-- [ ] 3.2 手动集成：`SITE_SIJISHE_PROXY_URLS` 配置“1 个连接失败/403 代理 + 1 个好代理”试运行，确认自动切换后签到成功（本地可在列表末尾加 `http://127.0.0.1:7897` 作为好代理）；全部坏代理时确认 `site-unavailable`；runner 实测 run 31257017967 已复现旧缺陷（403 不轮换），改后需用 CI `workflow_dispatch` 复测当前 56 代理列表
+- [x] 3.2 手动集成：runner 实测 run 31257331306（56 代理 Secret）验证自动切换：代理1 返回 403 触发轮换、代理2 连接失败触发轮换、代理3 全流程 200，轮换与粘性行为符合预期；全部坏代理时仍为 `site-unavailable` 语义（单测覆盖）

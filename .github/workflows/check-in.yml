@@ -23,9 +23,8 @@ jobs:
       # CHECK_IN_SITES 优先取手动输入，其次仓库变量（留空则运行 SITE_CONFIGS 全部站点）
       CHECK_IN_SITES: ${{ inputs.sites || vars.CHECK_IN_SITES }}
       SITE_CONFIGS: ${{ secrets.SITE_CONFIGS }}
-      # 代理（站点级优先于全局，按需配置对应 Secrets）
-      CHECK_IN_PROXY_URLS: ${{ secrets.CHECK_IN_PROXY_URLS }}
-      SITE_SIJISHE_PROXY_URLS: ${{ secrets.SITE_SIJISHE_PROXY_URLS }}
+      # 代理（IP 池，逗号分隔多个池 URL；按需分批补给，按需配置对应 Secret）
+      CHECK_IN_PROXY_POOL_URLS: ${{ secrets.CHECK_IN_PROXY_POOL_URLS }}
       # 通知渠道（按需配置对应 Secrets）
       BARK_PUSH: ${{ secrets.BARK_PUSH }}
       PUSH_KEY: ${{ secrets.PUSH_KEY }}
@@ -69,7 +68,7 @@ jobs:
             sessions-${{ runner.os }}-${{ github.ref }}-
 
       - name: Run check-in
-        run: uv run auto-check-in --config config/check-in.toml --debug
+        run: uv run auto-check-in --config config/check-in.toml
 
       - name: Save session cache
         if: always()

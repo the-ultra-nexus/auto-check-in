@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 
@@ -35,7 +36,11 @@ class SijisheAdapter:
     ):
         self.config = config
         self._session_factory = session_factory
-        self._session_provider = session_provider or SessionProvider(config.network)
+        self._session_provider = session_provider or SessionProvider(
+            config.network,
+            direct_first=config.direct_first,
+            probe_url=f"{config.base_url.rstrip('/')}{config.sign_path}",
+        )
 
     @contextmanager
     def _new_session(self) -> Iterator[Any]:
@@ -60,7 +65,7 @@ class SijisheAdapter:
         try:
             with self._new_session() as session:
                 base = self.config.base_url.rstrip("/")
-                sign_page = f"{base}/k_misign-sign.html"
+                sign_page = f"{base}{self.config.sign_path}"
                 self._restore_session(session, account.username)
                 if not self._is_logged_in(session, sign_page):
                     self._login(session, base, account)
@@ -123,13 +128,15 @@ class SijisheAdapter:
             save_cookies(self.config.session_dir, self.config.name, username, cookies)
 
     def _login(self, session: Any, base: str, account: Account) -> None:
-        sign_page = f"{base}/k_misign-sign.html"
+        sign_page = f"{base}{self.config.sign_path}"
         session.get(
             sign_page,
             headers=ua_headers(),
             timeout=self.config.network.request_timeout_seconds,
         )
-        for _ in range(self.config.network.retries):
+        for attempt in range(self.config.network.retries):
+            if attempt > 0 and self.config.network.retry_delay_seconds > 0:
+                time.sleep(self.config.network.retry_delay_seconds)
             logger.debug("login step=dialog-fetch site=%s", self.config.name)
             dialog = self._fetch_dialog(session, base)
             form = parse_login_dialog(dialog)

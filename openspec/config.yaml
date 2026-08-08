@@ -1,24 +1,47 @@
 schema: spec-driven
 
 context: |
-  Project: Auto Check In is a Python 3.12 automation script for the 司机社 site.
-  Runtime: requests, lxml, Selenium, ddddocr, OpenCV, and onnxruntime.
-  Entry point: the auto_check_in package via `uv run auto-check-in`.
-  Notification delivery is provided by auto_check_in.notify.
-  Credentials and notification tokens must be supplied through environment variables;
-  never place real credentials, cookies, API tokens, or captured CAPTCHA images in the repository.
-  The external site and browser driver are integration boundaries. Changes must keep
-  network interactions time-bounded and make failure outcomes observable in the
-  notification content.
-  Preserve compatibility with the existing scheduler/function entry point unless a
-  change explicitly migrates it. Add focused automated tests for logic that can be
-  isolated from the live site; live sign-in remains a manual integration check.
+  Project: Auto Check In is a pure-HTTP multi-site sign-in automation tool (Python 3.12).
+  Runtime: requests + lxml only; no browser, Selenium, or OCR components.
+  Entry point: the auto_check_in package via `uv run auto-check-in --config config/check-in.toml`.
+  Each site is implemented by an independent adapter (login + sign-in); sites run in
+  parallel in one process with fully isolated environments.
+  Proxy strategy: on-demand batched replenishment from one or more proxy pools
+  (CHECK_IN_PROXY_POOL_URLS, env/Secret only, never in TOML). A batch is acquired
+  only when the direct-first attempt fails: the first site request tries a direct
+  connection (short timeout budget) and returns immediately on success (0 pool
+  cost); on transport-level failure the runtime acquires a batch and retries.
+  The site-level `direct_first` flag (default true) is configured per site via
+  SITE_CONFIGS or SITE_<NAME>_DIRECT_FIRST (env wins, never TOML); with it
+  disabled, a batch is acquired before the first request. Batches are isolated
+  per site; a new batch is acquired only when the current one is exhausted.
+  FailoverSession rotates on ProxyError / 403 / 429 / 5xx and sticks to the first
+  working proxy. Session-level failures (page loads with HTTP 200 but login-failed)
+  do NOT trigger pool acquisition; they trigger cookie clear + re-login.
+  Login sessions are cached on disk and reused until expiry, then re-login.
+  Notification delivery is provided by auto_check_in.notify through multiple channels.
+  Credentials, cookies, API tokens, and proxy pool URLs must be supplied through
+  environment variables / GitHub Secrets; never place them in the repository or in
+  config files. Logs are redacted and real secrets never appear in URLs.
+  External sites are integration boundaries. Changes must keep network interactions
+  time-bounded (pool fetch, probing, and request timeouts) and make failure outcomes
+  observable in logs and notification content.
+  Env-surface consistency is enforced: env changes must be mirrored in .env.example,
+  the GitHub Actions workflow env mapping, and tests/test_github_workflow.py
+  (CI fails on drift).
+  Add focused automated tests for logic that can be isolated from the live site;
+  live sign-in remains a manual integration check.
 
 rules:
   proposal:
-    - State behavior changes, external-site assumptions, credential handling, and non-goals.
+    - State behavior changes, external-site assumptions, credential/proxy-secret handling, env-surface changes, and non-goals.
+    - If the change touches global behavior or configuration (proxy strategy, runtime behavior, env surface, TOML layout, workflow, CLI), call out the required doc syncs (README.md and this config.yaml).
   design:
-    - Identify Selenium, OCR, network, scheduler, and notification effects.
+    - Identify proxy acquisition (on-demand batches), failover, session cache, network timeouts, notification, and per-site isolation effects.
+    - Keep proxy pool URLs and credentials out of TOML; every pool fetch, probe, and request must be time-bounded.
+    - Global design or configuration changes MUST update README.md and this config.yaml so user docs and project context stay the source of truth.
   tasks:
     - Include automated verification where feasible and a manual integration verification step when site behavior changes.
+    - When a change affects global behavior or configuration, include explicit tasks that sync README.md and openspec/config.yaml alongside the code change.
+    - Any env addition/removal MUST keep .env.example, the workflow env mapping, and tests/test_github_workflow.py in sync.
     - New files added by a change MUST be confirmed tracked by git (git status shows A/M, not silently ignored by .gitignore); "exists locally" does not equal "committed".

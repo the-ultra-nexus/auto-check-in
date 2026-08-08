@@ -10,11 +10,39 @@ from unittest import mock
 import requests
 
 from auto_check_in.adapters.sijishe import SijisheAdapter
+from auto_check_in.config import NetworkConfig
 from auto_check_in.discuz import md5_password
 from auto_check_in.http import USER_AGENTS, random_user_agent
 from auto_check_in.models import Account, CheckInStatus
 
-from helpers import FakeResponse, FakeSession, make_site_config
+from helpers import ANON_SIGN_PAGE, LOGGED_SIGN_PAGE, FakeResponse, FakeSession, make_site_config
+
+
+class CustomPathSession(FakeSession):
+    """FakeSession that serves pages at a custom sign path."""
+
+    def __init__(self, sign_path: str):
+        super().__init__()
+        self.sign_path = sign_path
+
+    def _respond(self, url: str) -> FakeResponse:
+        if self.sign_path in url:
+            self.sign_visits += 1
+            return FakeResponse(ANON_SIGN_PAGE if self.sign_visits == 1 else LOGGED_SIGN_PAGE)
+        return super()._respond(url)
+
+
+class AlwaysAnonSession(FakeSession):
+    """FakeSession whose login never takes effect (keeps serving the anon page)."""
+
+    def _respond(self, url: str) -> FakeResponse:
+        if "member.php?mod=logging&action=login&infloat=yes" in url:
+            return FakeResponse(self.dialog)
+        if "member.php?mod=logging&action=login&loginsubmit=yes" in url:
+            return FakeResponse("")
+        if "k_misign-sign.html" in url:
+            return FakeResponse(ANON_SIGN_PAGE)
+        return FakeResponse("")
 
 
 class AdapterTests(unittest.TestCase):
@@ -42,6 +70,32 @@ class AdapterTests(unittest.TestCase):
         )
         result = adapter.run(Account("alice", "pw"))
         self.assertEqual(result.status, CheckInStatus.ALREADY_CHECKED_IN)
+
+    def test_custom_sign_path_used(self):
+        session = CustomPathSession("/custom-sign.html")
+        adapter = SijisheAdapter(
+            make_site_config(session_cache=False, sign_path="/custom-sign.html"),
+            session_factory=lambda: session,
+        )
+        result = adapter.run(Account("alice", "pw"))
+        self.assertEqual(result.status, CheckInStatus.SUCCESS)
+        self.assertTrue(any("/custom-sign.html" in url for _, url, _ in session.requests))
+        self.assertFalse(any("/k_misign-sign.html" in url for _, url, _ in session.requests))
+
+    def test_retry_delay_applied_between_login_attempts(self):
+        session = AlwaysAnonSession()
+        adapter = SijisheAdapter(
+            make_site_config(
+                session_cache=False,
+                network=NetworkConfig(retries=3, retry_delay_seconds=2.0),
+            ),
+            session_factory=lambda: session,
+        )
+        with mock.patch("auto_check_in.adapters.sijishe.time.sleep") as sleep:
+            result = adapter.run(Account("alice", "pw"))
+        self.assertEqual(result.status, CheckInStatus.LOGIN_FAILED)
+        self.assertEqual(sleep.call_count, 2)
+        sleep.assert_any_call(2.0)
 
     def test_session_invalid(self):
         session = FakeSession()
