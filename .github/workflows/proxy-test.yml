@@ -1,6 +1,8 @@
 name: Proxy Connectivity Test (temp)
 
 on:
+  push:
+    branches: [the-ultra-nexus/fix-proxy]
   workflow_dispatch:
     inputs:
       proxies:
