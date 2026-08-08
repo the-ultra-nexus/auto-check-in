@@ -2,7 +2,8 @@
 # Auto Check-In 非敏感配置
 #
 # 站点地址与账号凭据必须通过环境变量 / GitHub Secrets 注入，
-# 禁止把密码、cookie、token 写入本文件：
+# 禁止把密码、cookie、token 写入本文件；在 [sites.*] 中写 accounts 等
+# 凭据键会被直接判定为配置错误并给出指引（不会静默忽略）：
 #   SITE_SIJISHE_BASE_URL=https://xsijishe.net
 #   SITE_SIJISHE_ACCOUNTS=账号1&密码1@账号2&密码2
 # ============================================================

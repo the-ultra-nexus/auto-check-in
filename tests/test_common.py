@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -24,7 +26,7 @@ from auto_check_in.discuz import (
 from auto_check_in.http import USER_AGENTS, SessionProvider, ua_headers
 from auto_check_in.models import AccountResult, CheckInStatus, RunSummary
 from auto_check_in.runner import run
-from auto_check_in.security import redact_text
+from auto_check_in.security import mask_username, redact_text
 from auto_check_in.session import load_cookies, save_cookies, session_path
 
 from helpers import ANON_SIGN_PAGE, DIALOG, write_config
@@ -202,6 +204,79 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.sites[0].session_max_age_seconds, 3600.0)
 
 
+    def test_sensitive_keys_in_toml_rejected(self):
+        path = write_config(
+            "[runtime]\nenabled_sites = ['sijishe']\n"
+            "[sites.sijishe]\nadapter = 'sijishe'\nbase_url = 'https://a.example'\naccounts = 'u&p'\n"
+        )
+        with self.assertRaises(ConfigError) as ctx:
+            load_config(path, {})
+        message = str(ctx.exception)
+        self.assertIn("sites.sijishe.accounts", message)
+        self.assertIn("SITE_SIJISHE_ACCOUNTS", message)
+        self.assertIn("SITE_CONFIGS", message)
+
+    def test_recognition_log_emitted(self):
+        path = write_config("[runtime]\nenabled_sites = ['sijishe']\n")
+        with self.assertLogs("auto_check_in", level="INFO") as logs:
+            load_config(
+                path,
+                {
+                    "SITE_CONFIGS": json.dumps(
+                        {"sijishe": {"base_url": "https://a.example", "accounts": "u1&p1@u2&p2"}}
+                    )
+                },
+            )
+        self.assertTrue(
+            any("site=sijishe accounts=2 recognized" in line for line in logs.output)
+        )
+
+
+class MaskUsernameTests(unittest.TestCase):
+    def test_empty_and_single_char(self):
+        self.assertEqual(mask_username(""), "")
+        self.assertEqual(mask_username("a"), "*")
+
+    def test_short_names(self):
+        self.assertEqual(mask_username("abc"), "a***")
+        self.assertEqual(mask_username("abcd"), "a***")
+
+    def test_long_names(self):
+        self.assertEqual(mask_username("alice"), "al***e")
+        self.assertEqual(mask_username("alice_smith"), "al***h")
+
+    def test_masked_never_contains_full_username(self):
+        for name in ("a", "ab", "abcd", "alice", "alice_smith"):
+            self.assertNotIn(name, mask_username(name))
+
+
+class CliDryRunTests(unittest.TestCase):
+    def test_dry_run_shows_count_and_masked_usernames(self):
+        from auto_check_in.cli import main as cli_main
+
+        path = write_config("[runtime]\nenabled_sites = ['sijishe']\n")
+        env = {
+            "SITE_CONFIGS": json.dumps(
+                {
+                    "sijishe": {
+                        "base_url": "https://a.example",
+                        "accounts": "alice_smith&p1@bob&p2",
+                    }
+                }
+            )
+        }
+        with mock.patch.dict("os.environ", env, clear=False):
+            with contextlib.redirect_stdout(StringIO()) as out:
+                code = cli_main(["--config", str(path), "--dry-run"])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        self.assertIn("已解析 2 个账号", text)
+        self.assertIn("al***h", text)
+        self.assertIn("b***", text)
+        self.assertNotIn("alice_smith", text)
+        self.assertNotIn("bob", text)
+
+
 class DiscuzParsingTests(unittest.TestCase):
     def test_parse_login_dialog(self):
         form = parse_login_dialog(DIALOG)
@@ -347,6 +422,32 @@ class RunnerTests(unittest.TestCase):
         sleep.assert_not_called()
 
 
+    def test_per_account_log_uses_masked_username_and_ordinal(self):
+        class StubAdapter:
+            def __init__(self, config):
+                self.config = config
+
+            def run(self, account):
+                return AccountResult(account.username, CheckInStatus.SUCCESS)
+
+        config = CheckInConfig(
+            sites=(
+                SiteConfig(
+                    "s", "stub", "https://a.example", "alice_smith&p1@bob&p2",
+                    network=NetworkConfig(request_delay_seconds=0),
+                ),
+            ),
+            max_workers=1,
+        )
+        with self.assertLogs("auto_check_in", level="INFO") as logs:
+            run(config, adapter_types={"stub": StubAdapter})
+        output = "\n".join(logs.output)
+        self.assertIn("account=1 username=al***h", output)
+        self.assertIn("account=2 username=b***", output)
+        self.assertNotIn("alice_smith", output)
+        self.assertNotIn("bob", output)
+
+
 class RedactionTests(unittest.TestCase):
     def test_redact_cookie_and_hex(self):
         text = "SgL6_2132_auth=secret123; cf_clearance=token abc123456789012345678901234567890"
@@ -358,6 +459,12 @@ class RedactionTests(unittest.TestCase):
     def test_summary_excludes_credentials(self):
         summary = RunSummary([AccountResult("alice", CheckInStatus.LOGIN_FAILED, "SgL6_2132_auth=secret 失败")])
         self.assertNotIn("secret", summary.render())
+
+    def test_summary_uses_masked_username(self):
+        summary = RunSummary([AccountResult("alice_smith", CheckInStatus.SUCCESS)])
+        rendered = summary.render()
+        self.assertIn("al***h", rendered)
+        self.assertNotIn("alice_smith", rendered)
 
     def test_status_labels_are_readable(self):
         self.assertEqual(CheckInStatus.SUCCESS.label, "签到成功")

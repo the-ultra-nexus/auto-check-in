@@ -1,50 +1,11 @@
-# operations-and-observability Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change hardening-and-gap-fixes. Update Purpose after archive.
-## Requirements
-### Requirement: Structured logging
-The runtime SHALL emit redacted structured log lines per site and per account using stdlib logging, with level controlled by `CHECK_IN_LOG_LEVEL` or `--debug`.
+### Requirement: Per-account log line
+When an account finishes, the runtime SHALL emit a log line containing the site, the masked account username (never the full username), status, and duration.
 
-#### Scenario: Debug logs are redacted
-- **WHEN** debug logging is enabled
-- **THEN** log lines include sanitized response summaries without passwords, cookies, or CAPTCHA text
-
-#### Scenario: Per-account log line
-- **WHEN** an account finishes
-- **THEN** a log line contains the site, the masked account username (never the full username), status, and duration
-
-### Requirement: Site-grouped summary
-The rendered summary SHALL group account results by site with site headers.
-
-#### Scenario: Two sites in output
-- **WHEN** two sites are processed
-- **THEN** the rendered output contains separate `【site】` blocks for each site
-
-### Requirement: Manual site selection
-The workflow SHALL accept a `workflow_dispatch` sites input that overrides `CHECK_IN_SITES`.
-
-#### Scenario: Manual run with one site
-- **WHEN** an operator dispatches the workflow with `sijishe` only
-- **THEN** only `sijishe` is processed
-
-### Requirement: Configurable request pacing
-The system SHALL support an optional per-account delay (`CHECK_IN_REQUEST_DELAY`, default 3) with small random jitter.
-
-#### Scenario: Delay configured
-- **WHEN** `CHECK_IN_REQUEST_DELAY` is greater than zero
-- **THEN** the adapter waits between accounts within a site
-
-#### Scenario: Delay disabled
-- **WHEN** `CHECK_IN_REQUEST_DELAY` is zero
-- **THEN** no artificial wait is inserted
-
-### Requirement: Per-site timing
-The runner SHALL record and log the elapsed time of each site.
-
-#### Scenario: Duration logged
-- **WHEN** a site finishes processing
-- **THEN** its elapsed time appears in the logs
+#### Scenario: Per-account log line with masked username
+- **WHEN** an account finishes processing
+- **THEN** a log line contains the site, the masked username, status, and duration, and does not contain the full username
 
 ### Requirement: Unexpected adapter errors are observable
 When a site adapter encounters an unexpected exception, the runtime SHALL log the redacted cause and SHALL include a redacted, truncated cause in the account result message surfaced in the notification. HTTP and network failures SHALL map to a meaningful failure status rather than a generic error, while preserving the redacted detail: HTTP/network failures outside the login submission step (e.g. dialog fetch, sign-in request, connection refused, timeout, TLS failure) SHALL map to `site-unavailable`, while an HTTP 4xx (typically 403) on the login submission step SHALL map to `login-blocked` with an actionable message.
@@ -64,6 +25,8 @@ When a site adapter encounters an unexpected exception, the runtime SHALL log th
 #### Scenario: Credentials never leak
 - **WHEN** an exception message or response text contains credential-like values (passwords, cookies, long hex tokens)
 - **THEN** the logged and notified content has those values redacted
+
+## ADDED Requirements
 
 ### Requirement: Login submission is observable
 When a login submission is rejected or debug logging is enabled, the runtime SHALL identify the failed step (dialog fetch, login submit, or sign-in) and SHALL confirm that the login form fields were filled using only field names and fill-state indicators, never credential values.

@@ -76,11 +76,14 @@ class FakeSession:
         self.plugin_response = FakeResponse("<root><![CDATA[]]></root>")
         self.dialog = DIALOG
         self.fix_after_login = False
+        self.login_post_response: FakeResponse | None = None
 
     def _respond(self, url: str) -> FakeResponse:
         if "member.php?mod=logging&action=login&infloat=yes" in url:
             return FakeResponse(self.dialog)
         if "member.php?mod=logging&action=login&loginsubmit=yes" in url:
+            if self.login_post_response is not None:
+                return self.login_post_response
             self.cookies.append(FakeCookie("SgL6_2132_auth", "abc"))
             if self.fix_after_login:
                 self.plugin_response = FakeResponse("<root><![CDATA[]]></root>")

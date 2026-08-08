@@ -5,13 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from .security import redact_text
+from .security import mask_username, redact_text
 
 
 class CheckInStatus(StrEnum):
     SUCCESS = "success"
     ALREADY_CHECKED_IN = "already-checked-in"
     LOGIN_FAILED = "login-failed"
+    LOGIN_BLOCKED = "login-blocked"
     SITE_UNAVAILABLE = "site-unavailable"
     CHECK_IN_FAILED = "check-in-failed"
     CONFIG_ERROR = "config-error"
@@ -28,6 +29,7 @@ class CheckInStatus(StrEnum):
             CheckInStatus.SUCCESS: "签到成功",
             CheckInStatus.ALREADY_CHECKED_IN: "今日已签到",
             CheckInStatus.LOGIN_FAILED: "登录失败",
+            CheckInStatus.LOGIN_BLOCKED: "登录被拦截",
             CheckInStatus.SITE_UNAVAILABLE: "站点不可用",
             CheckInStatus.CHECK_IN_FAILED: "签到失败",
             CheckInStatus.CONFIG_ERROR: "配置错误",
@@ -52,7 +54,7 @@ class AccountResult:
 
     def summary_line(self) -> str:
         suffix = f"：{redact_text(self.message)}" if self.message else ""
-        return f"账户[{self.username}] {self.status.label}{suffix}"
+        return f"账户[{mask_username(self.username)}] {self.status.label}{suffix}"
 
 
 @dataclass(slots=True)
