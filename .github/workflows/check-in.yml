@@ -69,7 +69,7 @@ jobs:
             sessions-${{ runner.os }}-${{ github.ref }}-
 
       - name: Run check-in
-        run: uv run auto-check-in --config config/check-in.toml
+        run: uv run auto-check-in --config config/check-in.toml --debug
 
       - name: Save session cache
         if: always()
