@@ -37,15 +37,23 @@ def ua_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
     return headers
 
 
-class FailoverSession(requests.Session):
-    """A requests.Session that retries through the next proxy on proxy connection failure.
+# 命中这些 HTTP 状态码即视为当前代理不可用并轮换：
+# 403 站点/WAF 拒绝出口 IP，429 限流，5xx 多为代理上游或目标故障。
+ROTATE_STATUS_CODES = frozenset({403, 429, *range(500, 600)})
 
-    Once a proxy works it is kept for subsequent requests (sticky); rotation only
+
+class FailoverSession(requests.Session):
+    """A requests.Session that retries through the next proxy on proxy failure.
+
+    Once a proxy works it is kept for subsequent requests (sticky); rotation
     happens when the current proxy raises a proxy connection error
-    (``requests.exceptions.ProxyError``). When every proxy fails, the last error
-    is raised and the caller's existing failure handling (``site-unavailable``) applies.
-    Ambient environment proxies (``HTTP_PROXY`` / ``HTTPS_PROXY`` / ``ALL_PROXY``) are
-    ignored so site traffic only ever uses the configured proxy list.
+    (``requests.exceptions.ProxyError``) or the site rejects the request with an
+    HTTP status in ``ROTATE_STATUS_CODES`` (``403`` / ``429`` / ``5xx``). When
+    every proxy fails, the last error is raised or the last rejected response is
+    returned, and the caller's existing failure handling (``site-unavailable``)
+    applies. Ambient environment proxies (``HTTP_PROXY`` / ``HTTPS_PROXY`` /
+    ``ALL_PROXY``) are ignored so site traffic only ever uses the configured
+    proxy list.
     """
 
     def __init__(
@@ -64,17 +72,31 @@ class FailoverSession(requests.Session):
         if not self._proxy_urls:
             return super().request(method, url, *args, **kwargs)
         last_error: requests.exceptions.ProxyError | None = None
+        last_response: Any = None
         for _ in range(len(self._proxy_urls)):
             proxy = self._proxy_urls[self._proxy_index % len(self._proxy_urls)]
             self.proxies = {"http": proxy, "https": proxy}
             try:
-                return super().request(method, url, *args, **kwargs)
+                response = super().request(method, url, *args, **kwargs)
             except requests.exceptions.ProxyError as exc:
                 last_error = exc
                 logger.debug("proxy %s 连接失败，轮换到下一个代理", redact_text(proxy))
                 self._proxy_index += 1
-        assert last_error is not None
-        raise last_error
+                continue
+            if response.status_code in ROTATE_STATUS_CODES:
+                last_response = response
+                logger.debug(
+                    "proxy %s 被站点拒绝 (HTTP %s)，轮换到下一个代理",
+                    redact_text(proxy),
+                    response.status_code,
+                )
+                self._proxy_index += 1
+                continue
+            return response
+        if last_error is not None:
+            raise last_error
+        assert last_response is not None
+        return last_response
 
 
 class SessionProvider:

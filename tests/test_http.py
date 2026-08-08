@@ -80,6 +80,100 @@ class FailoverSessionTests(unittest.TestCase):
         finally:
             session.close()
 
+    def test_http_rejection_rotates_to_next_proxy(self):
+        provider = self._provider(("http://1.2.3.4:8080", "http://5.6.7.8:3128"))
+        session = provider.new_session()
+        attempts: list[dict] = []
+
+        def fake_request(self_, method, url, **kwargs):
+            attempts.append(dict(self_.proxies))
+            if len(attempts) == 1:
+                return mock.Mock(status_code=403)
+            return mock.Mock(status_code=200)
+
+        with mock.patch.object(requests.Session, "request", fake_request):
+            response = session.request("GET", "https://xsijishe.net")
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(
+                attempts,
+                [
+                    {"http": "http://1.2.3.4:8080", "https": "http://1.2.3.4:8080"},
+                    {"http": "http://5.6.7.8:3128", "https": "http://5.6.7.8:3128"},
+                ],
+            )
+            self.assertEqual(
+                session.proxies,
+                {"http": "http://5.6.7.8:3128", "https": "http://5.6.7.8:3128"},
+            )
+        finally:
+            session.close()
+
+    def test_rotate_status_codes_cover_rejections(self):
+        for status in (403, 429, 500, 502, 503, 504):
+            with self.subTest(status=status):
+                provider = self._provider(("http://1.2.3.4:8080", "http://5.6.7.8:3128"))
+                session = provider.new_session()
+                attempts: list[dict] = []
+
+                def fake_request(self_, method, url, **kwargs):
+                    attempts.append(dict(self_.proxies))
+                    if len(attempts) == 1:
+                        return mock.Mock(status_code=status)
+                    return mock.Mock(status_code=200)
+
+                with mock.patch.object(requests.Session, "request", fake_request):
+                    response = session.request("GET", "https://xsijishe.net")
+                try:
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(len(attempts), 2)
+                    self.assertEqual(
+                        session.proxies,
+                        {"http": "http://5.6.7.8:3128", "https": "http://5.6.7.8:3128"},
+                    )
+                finally:
+                    session.close()
+
+    def test_other_http_status_does_not_rotate(self):
+        for status in (200, 301, 401, 404):
+            with self.subTest(status=status):
+                provider = self._provider(("http://1.2.3.4:8080", "http://5.6.7.8:3128"))
+                session = provider.new_session()
+                attempts: list[dict] = []
+
+                def fake_request(self_, method, url, **kwargs):
+                    attempts.append(dict(self_.proxies))
+                    return mock.Mock(status_code=status)
+
+                with mock.patch.object(requests.Session, "request", fake_request):
+                    response = session.request("GET", "https://xsijishe.net")
+                try:
+                    self.assertEqual(response.status_code, status)
+                    self.assertEqual(len(attempts), 1)
+                    self.assertEqual(
+                        session.proxies,
+                        {"http": "http://1.2.3.4:8080", "https": "http://1.2.3.4:8080"},
+                    )
+                finally:
+                    session.close()
+
+    def test_all_proxies_rejected_returns_last_response(self):
+        provider = self._provider(("http://1.2.3.4:8080", "http://5.6.7.8:3128"))
+        session = provider.new_session()
+        attempts: list[dict] = []
+
+        def fake_request(self_, method, url, **kwargs):
+            attempts.append(dict(self_.proxies))
+            return mock.Mock(status_code=403 if len(attempts) == 1 else 503)
+
+        with mock.patch.object(requests.Session, "request", fake_request):
+            response = session.request("GET", "https://xsijishe.net")
+        try:
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(len(attempts), 2)
+        finally:
+            session.close()
+
     def test_session_sticks_to_working_proxy(self):
         provider = self._provider(("http://1.2.3.4:8080", "http://5.6.7.8:3128"))
         session = provider.new_session()
@@ -153,6 +247,24 @@ class FailoverSessionTests(unittest.TestCase):
         ) as logs:
             with self.assertRaises(ProxyError):
                 session.request("GET", "https://xsijishe.net")
+        text = "\n".join(logs.output)
+        try:
+            self.assertIn("http://***@1.2.3.4:8080", text)
+            self.assertNotIn("user:pass", text)
+        finally:
+            session.close()
+
+    def test_http_rejection_log_redacts_credentials(self):
+        provider = self._provider(("http://user:pass@1.2.3.4:8080", "http://5.6.7.8:3128"))
+        session = provider.new_session()
+
+        def fake_request(self_, method, url, **kwargs):
+            return mock.Mock(status_code=403)
+
+        with mock.patch.object(requests.Session, "request", fake_request), self.assertLogs(
+            "auto_check_in", level="DEBUG"
+        ) as logs:
+            session.request("GET", "https://xsijishe.net")
         text = "\n".join(logs.output)
         try:
             self.assertIn("http://***@1.2.3.4:8080", text)

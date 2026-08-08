@@ -1,10 +1,14 @@
 ## ADDED Requirements
 
-### Requirement: Proxy failover on connection failure
-When a site request through the current proxy fails because the proxy itself is unreachable (a proxy connection error such as `requests.exceptions.ProxyError`, including connect timeouts to the proxy), the runtime SHALL retry the same request through the next configured proxy, rotating until a request succeeds or every configured proxy has been attempted. Once a proxy succeeds, the session SHALL keep using it for subsequent requests. Non-proxy failures (site-level HTTP errors or other request errors) SHALL NOT trigger rotation. When every configured proxy fails, the runtime SHALL raise the last error and the account SHALL fail as `site-unavailable`.
+### Requirement: Proxy failover on proxy failure
+When a site request through the current proxy fails because the proxy itself is unreachable (a proxy connection error such as `requests.exceptions.ProxyError`, including connect timeouts to the proxy) or the site rejects the request with an HTTP status that marks the proxy as unusable (`403`, `429`, or any `5xx`), the runtime SHALL retry the same request through the next configured proxy, rotating until a request succeeds or every configured proxy has been attempted. Once a proxy succeeds, the session SHALL keep using it for subsequent requests. Other failures (site-level HTTP errors such as `401`/`404`, or non-proxy request errors) SHALL NOT trigger rotation. When every configured proxy fails, the runtime SHALL raise the last error or return the last rejected response, and the account SHALL fail as `site-unavailable`.
 
 #### Scenario: Failover to the next proxy
 - **WHEN** a request through proxy A raises a proxy connection error and proxy B is configured
+- **THEN** the same request is retried through proxy B
+
+#### Scenario: Failover on site rejection
+- **WHEN** a request through proxy A is rejected with `403`, `429`, or a `5xx` status and proxy B is configured
 - **THEN** the same request is retried through proxy B
 
 #### Scenario: Working proxy is sticky
@@ -12,11 +16,11 @@ When a site request through the current proxy fails because the proxy itself is 
 - **THEN** subsequent requests in that session use proxy B
 
 #### Scenario: All proxies fail
-- **WHEN** every configured proxy raises a proxy connection error
-- **THEN** the runtime raises the last error and the account fails as `site-unavailable`
+- **WHEN** every configured proxy fails with a proxy connection error or a rejection status
+- **THEN** the runtime raises the last error or returns the last rejected response and the account fails as `site-unavailable`
 
-#### Scenario: No rotation on site-level failure
-- **WHEN** the site returns an HTTP error response through the working proxy
+#### Scenario: No rotation on other site-level failure
+- **WHEN** the site returns an HTTP error response such as `401` or `404` through the working proxy
 - **THEN** the runtime does not rotate to another proxy
 
 ### Requirement: Site sessions ignore ambient environment proxies

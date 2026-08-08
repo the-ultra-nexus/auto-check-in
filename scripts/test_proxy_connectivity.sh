@@ -54,7 +54,7 @@ export TARGET
 helper=$(mktemp)
 cat > "$helper" <<'HELPER'
 p="$1"
-code=$(curl -x "$p" -I -s --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "$TARGET" 2>/dev/null)
+code=$(curl -x "$p" -s --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "$TARGET" 2>/dev/null)
 rc=$?
 if [ "${code:-000}" != "000" ]; then
   echo "OK   $p -> HTTP $code"
