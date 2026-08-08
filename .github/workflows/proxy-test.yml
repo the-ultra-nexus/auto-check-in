@@ -28,8 +28,14 @@ jobs:
         shell: bash
         run: |
           set -u
-          export TARGET="${{ inputs.target }}"
-          IFS=',' read -ra PROXIES <<< "${{ inputs.proxies }}"
+          TARGET="${{ inputs.target }}"
+          if [ -z "$TARGET" ]; then TARGET="https://xsijishe.net/k_misign-sign.html"; fi
+          export TARGET
+          LIST="${{ inputs.proxies }}"
+          if [ -z "$LIST" ]; then
+            LIST='http://72.10.160.170:6931,http://147.182.180.242:80,http://166.117.179.111:8080,http://72.240.9.63:80,http://147.28.240.215:443,http://5.2.228.168:56788,http://67.43.227.228:1571,http://202.61.204.51:80,http://72.10.160.170:31939,http://51.91.109.83:80,http://62.3.12.18:80,http://134.35.154.101:8080'
+          fi
+          IFS=',' read -ra PROXIES <<< "$LIST"
           : > /tmp/proxies.txt
           for p in "${PROXIES[@]}"; do
             echo "$p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' >> /tmp/proxies.txt
