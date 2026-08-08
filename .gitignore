@@ -21,6 +21,7 @@ after_sign.png
 # Local configuration and secrets
 .env
 .env.*
+!.env.example
 config/local.toml
 config/*.secret.toml
 network-requests-*.json
