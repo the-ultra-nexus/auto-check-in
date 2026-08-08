@@ -1,0 +1,50 @@
+# ============================================================
+# Auto Check-In 非敏感配置
+#
+# 站点地址与账号凭据必须通过环境变量 / GitHub Secrets 注入，
+# 禁止把密码、cookie、token 写入本文件：
+#   SITE_SIJISHE_BASE_URL=https://xsijishe.net
+#   SITE_SIJISHE_ACCOUNTS=账号1&密码1@账号2&密码2
+# ============================================================
+
+[runtime]
+# 本次启用的站点列表；环境变量 CHECK_IN_SITES 优先于此值
+enabled_sites = ["sijishe"]
+
+# 站点并行度（CHECK_IN_MAX_WORKERS 覆盖），默认 min(站点数, 4)
+max_workers = 4
+
+# 是否缓存登录会话，复用有效 session 减少登录（CHECK_IN_SESSION_CACHE）
+session_cache = true
+
+# 会话缓存目录（CHECK_IN_SESSION_DIR），文件权限 0600
+session_dir = ".runtime/sessions"
+
+# 会话缓存最大有效期秒，超期直接重登；0 关闭（CHECK_IN_SESSION_MAX_AGE）
+session_max_age_seconds = 0.0
+
+[notification]
+# 通知标题前缀（简短）；发送时自动追加结果与日期，
+# 例如：签到 3/3 成功 08-08 / 签到 1/3 失败 08-08
+title = "签到"
+
+# 是否发送通知（CHECK_IN_NOTIFY）
+enabled = true
+
+# 每个站点一段；新增站点先注册适配器，再补充对应配置节
+[sites.sijishe]
+adapter = "sijishe"                 # 适配器名（SITE_SIJISHE_ADAPTER 覆盖）
+# base_url = "https://xsijishe.net"  # 非敏感默认值；推荐由 SITE_SIJISHE_BASE_URL 提供
+sign_path = "/k_misign-sign.html"   # 签到页路径
+
+# 站点级网络覆盖（可选），缺省使用 [network] 全局值
+# [sites.sijishe.network]
+# request_timeout_seconds = 20
+# retries = 5
+# retry_delay_seconds = 2.0
+
+[network]
+request_timeout_seconds = 15   # 单请求超时（CHECK_IN_REQUEST_TIMEOUT）
+retries = 3                    # 业务重试次数（CHECK_IN_RETRIES）
+retry_delay_seconds = 3.0      # 重试间隔秒（CHECK_IN_RETRY_DELAY）
+request_delay_seconds = 3.0    # 站点内账号间隔秒，0 关闭（CHECK_IN_REQUEST_DELAY）

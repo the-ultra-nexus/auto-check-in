@@ -1,0 +1,70 @@
+name: Daily Check In
+
+on:
+  schedule:
+    # 08:00 Asia/Shanghai (UTC+8)
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      sites:
+        description: "要运行的站点（逗号分隔，留空用仓库变量/全部）"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check-in:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # 多站点通用配置：SITE_CONFIGS 为 JSON Secret，包含全部站点；
+      # CHECK_IN_SITES 优先取手动输入，其次仓库变量（留空则运行 SITE_CONFIGS 全部站点）
+      CHECK_IN_SITES: ${{ inputs.sites || vars.CHECK_IN_SITES }}
+      SITE_CONFIGS: ${{ secrets.SITE_CONFIGS }}
+      # 通知渠道（按需配置对应 Secrets）
+      BARK_PUSH: ${{ secrets.BARK_PUSH }}
+      PUSH_KEY: ${{ secrets.PUSH_KEY }}
+      FSKEY: ${{ secrets.FSKEY }}
+      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+      TG_USER_ID: ${{ secrets.TG_USER_ID }}
+      DD_BOT_TOKEN: ${{ secrets.DD_BOT_TOKEN }}
+      DD_BOT_SECRET: ${{ secrets.DD_BOT_SECRET }}
+      QYWX_KEY: ${{ secrets.QYWX_KEY }}
+      SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+      SMTP_SSL: ${{ secrets.SMTP_SSL }}
+      SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_NAME: ${{ secrets.SMTP_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.2"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Restore session cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .runtime/sessions
+          key: sessions-${{ runner.os }}-${{ github.ref }}-${{ github.run_id }}
+          restore-keys: |
+            sessions-${{ runner.os }}-${{ github.ref }}-
+
+      - name: Run check-in
+        run: uv run auto-check-in --config config/check-in.toml
+
+      - name: Save session cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .runtime/sessions
+          key: sessions-${{ runner.os }}-${{ github.ref }}-${{ github.run_id }}
