@@ -108,5 +108,68 @@ class NotifyTests(unittest.TestCase):
         self.assertEqual(code, 1)
 
 
+class NotifyOnlyCliTests(unittest.TestCase):
+    def test_notify_only_without_site_credentials(self):
+        from auto_check_in.cli import main
+
+        env = {**NO_CHANNELS, "CONSOLE": "1"}
+        with mock.patch.dict(os.environ, env, clear=False), mock.patch(
+            "auto_check_in.notify.send"
+        ) as send:
+            code = main(["--notify-only"])
+        self.assertEqual(code, 0)
+        send.assert_called_once()
+        title, content = send.call_args.args
+        self.assertIn("测试", title)
+        self.assertIn("console", content)
+
+    def test_notify_only_no_channels_exits_2(self):
+        from auto_check_in.cli import main
+
+        with mock.patch.dict(os.environ, NO_CHANNELS, clear=False), mock.patch(
+            "auto_check_in.notify.send"
+        ) as send:
+            code = main(["--notify-only"])
+        self.assertEqual(code, 2)
+        send.assert_not_called()
+
+    def test_notify_only_notify_disabled_exits_2(self):
+        from auto_check_in.cli import main
+
+        env = {**NO_CHANNELS, "CONSOLE": "1", "CHECK_IN_NOTIFY": "false"}
+        with mock.patch.dict(os.environ, env, clear=False), mock.patch(
+            "auto_check_in.notify.send"
+        ) as send:
+            code = main(["--notify-only"])
+        self.assertEqual(code, 2)
+        send.assert_not_called()
+
+    def test_notify_only_mutually_exclusive(self):
+        from auto_check_in.cli import build_parser
+
+        for extra in ("--dry-run", "--no-notify"):
+            with self.assertRaises(SystemExit):
+                build_parser().parse_args(["--notify-only", extra])
+
+    def test_active_channels_reports_enabled(self):
+        from auto_check_in.notify import active_channels
+
+        env = {**NO_CHANNELS, "BARK_PUSH": "https://bark.example/push", "CONSOLE": "1"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            active = active_channels()
+        self.assertIn("bark", active)
+        self.assertIn("console", active)
+        self.assertNotIn("telegram", active)
+
+    def test_load_notify_settings_uses_toml_title(self):
+        from auto_check_in.config import load_notify_settings
+        from helpers import write_config
+
+        path = write_config("[notification]\ntitle = \"本地通知\"\nenabled = true\n")
+        title, enabled = load_notify_settings(path, {})
+        self.assertEqual(title, "本地通知")
+        self.assertTrue(enabled)
+
+
 if __name__ == "__main__":
     unittest.main()

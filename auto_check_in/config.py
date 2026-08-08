@@ -267,3 +267,24 @@ def load_config(
             "CHECK_IN_NOTIFY",
         ),
     )
+
+def load_notify_settings(
+    path: str | Path | None = None, environ: Mapping[str, str] | None = None
+) -> tuple[str, bool]:
+    """Load only notification settings (title, enabled) without requiring site configs.
+
+    Used by ``--notify-only`` so a notification test does not need site credentials.
+    """
+    env = os.environ if environ is None else environ
+    config_path = Path(path or env.get("AUTO_CHECK_IN_CONFIG", str(DEFAULT_CONFIG_PATH)))
+    raw: dict = {}
+    if config_path.exists():
+        with config_path.open("rb") as fh:
+            raw = tomllib.load(fh)
+    notification_raw = raw.get("notification", {}) if isinstance(raw.get("notification"), dict) else {}
+    title = str(notification_raw.get("title", raw.get("notification_title", "签到")))
+    enabled = _bool(
+        _env(env, "CHECK_IN_NOTIFY", str(notification_raw.get("enabled", raw.get("notify", True)))),
+        "CHECK_IN_NOTIFY",
+    )
+    return title, enabled

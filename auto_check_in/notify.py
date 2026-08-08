@@ -195,6 +195,34 @@ def smtp(title: str, content: str) -> None:
 CHANNELS = (bark, serverJ, telegram, dingtalk, feishu, qywx_bot, pushplus, pushdeer, webhook, ntfy, smtp, console)
 
 
+CHANNEL_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "bark": ("BARK_PUSH",),
+    "serverJ": ("PUSH_KEY",),
+    "telegram": ("TG_BOT_TOKEN", "TG_USER_ID"),
+    "dingtalk": ("DD_BOT_TOKEN", "DD_BOT_SECRET"),
+    "feishu": ("FSKEY",),
+    "qywx_bot": ("QYWX_KEY",),
+    "pushplus": ("PUSH_PLUS_TOKEN",),
+    "pushdeer": ("DEER_KEY",),
+    "webhook": ("WEBHOOK_URL", "WEBHOOK_METHOD"),
+    "ntfy": ("NTFY_TOPIC",),
+    "smtp": ("SMTP_SERVER", "SMTP_EMAIL", "SMTP_PASSWORD", "SMTP_NAME"),
+    "console": ("CONSOLE",),
+}
+
+
+def active_channels() -> list[str]:
+    """Return names of channels whose required environment variables are enabled."""
+    active: list[str] = []
+    for name, keys in CHANNEL_REQUIREMENTS.items():
+        if name == "console":
+            if _env("CONSOLE").lower() in {"1", "true", "yes", "on"}:
+                active.append(name)
+        elif all(_env(key) for key in keys):
+            active.append(name)
+    return active
+
+
 def _safe(channel, title: str, content: str) -> None:
     try:
         channel(title, content)
