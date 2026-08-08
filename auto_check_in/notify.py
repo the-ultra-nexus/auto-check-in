@@ -241,6 +241,7 @@ def _smtp_send(
     port: int,
     mode: str,
     email: str,
+    recipient: str,
     password: str,
     message: MIMEText,
 ) -> None:
@@ -257,7 +258,7 @@ def _smtp_send(
             client.ehlo()
     try:
         client.login(email, password)
-        client.sendmail(email, email, message.as_bytes())
+        client.sendmail(email, recipient, message.as_bytes())
     finally:
         try:
             client.quit()
@@ -274,6 +275,7 @@ def smtp(title: str, content: str) -> None:
     name = _env("SMTP_NAME")
     if not server or not email or not password or not name:
         return
+    recipient = _env("SMTP_TO") or email
     port_override = _env("SMTP_PORT")
     if port_override and not port_override.isdigit():
         raise ValueError(f"SMTP_PORT 无效: {port_override!r}")
@@ -281,12 +283,12 @@ def smtp(title: str, content: str) -> None:
     message = MIMEText(content, "plain", "utf-8")
     message["Subject"] = Header(title, "utf-8")
     message["From"] = formataddr((Header(name, "utf-8").encode(), email))
-    message["To"] = formataddr((Header(name, "utf-8").encode(), email))
+    message["To"] = formataddr((Header(name, "utf-8").encode(), recipient))
     attempts = _smtp_attempts(host, port, port_override, use_ssl, use_starttls)
     last_error: Exception | None = None
     for mode, target_port in attempts:
         try:
-            _smtp_send(host, target_port, mode, email, password, message)
+            _smtp_send(host, target_port, mode, email, recipient, password, message)
             return
         except _SMTP_DEFINITIVE_ERRORS:
             raise

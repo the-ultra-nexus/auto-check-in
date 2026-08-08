@@ -6,6 +6,8 @@ import random
 from typing import Any
 
 from .config import NetworkConfig
+from .log import logger
+from .security import redact_text
 
 USER_AGENTS = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -38,10 +40,24 @@ class SessionProvider:
 
     def __init__(self, network: NetworkConfig):
         self.network = network
+        self._proxy_index = 0
+
+    def _next_proxy(self) -> str | None:
+        """Pick the next proxy URL in round-robin order, or ``None`` when unset."""
+        proxies = self.network.proxy_urls
+        if not proxies:
+            return None
+        proxy = proxies[self._proxy_index % len(proxies)]
+        self._proxy_index += 1
+        return proxy
 
     def new_session(self) -> Any:
         import requests
 
         session = requests.Session()
         session.headers.update({"User-Agent": random_user_agent()})
+        proxy = self._next_proxy()
+        if proxy:
+            session.proxies = {"http": proxy, "https": proxy}
+            logger.debug("session proxy=%s", redact_text(proxy))
         return session

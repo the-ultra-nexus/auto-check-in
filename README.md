@@ -142,6 +142,25 @@ GitHub Actions 通过 `actions/cache` 在两次运行间恢复/保存 `.runtime/
 排查时结合 `--debug` 日志：会记录失败步骤（`dialog-fetch` / `login-submit` / `sign-in`）与登录表单
 字段填充状态（仅字段名，不含任何值）。
 
+### 通过代理访问站点（试用）
+
+当怀疑是出口 IP 被封时，可先配置少量代理 IP 验证。代理只作用于站点登录/签到流量，通知渠道不受影响；
+代理地址可能内嵌 `user:pass@` 凭据，因此只从环境变量/GitHub Secret 读取，禁止写入配置文件（写入会被
+明确报错）。每次运行按账号会话 round-robin 选取一个代理，换代理导致会话失效时会自动重新登录。
+
+```bash
+# 全局代理列表（逗号分隔，多个站点共用）
+export CHECK_IN_PROXY_URLS='http://user:pass@1.2.3.4:8080,http://5.6.7.8:3128'
+
+# 或只给某个站点指定（优先于全局）
+export SITE_SIJISHE_PROXY_URLS='http://1.2.3.4:8080'
+```
+
+GitHub Actions 中把代理地址放入 Secret（如 `SITE_SIJISHE_PROXY_URLS`），并在工作流 `env` 中映射后再使用。
+代理不可用或失败时，对应账号会以 `site-unavailable`（站点不可用）状态体现在通知与退出码中，便于识别坏代理。
+免费代理池存活时间短、且多为数据中心 IP，在 Cloudflare 前置的站点上可能触发人机校验，试用后请结合实际
+结果判断是否需要换更稳定的代理方案。
+
 ## 通知方式
 
 通知由 `auto_check_in/notify.py` 统一发送，支持多个渠道同时启用；所有值都通过环境变量或 GitHub Secrets 注入，禁止写入配置文件。文档、示例与规划文档中的账号一律使用占位符（如 `alice&secret`），禁止出现真实用户名/密码；真实凭据只存在于本机环境变量或 GitHub Secret 中。标题为短格式结果摘要，如 `签到 3/3 成功 08-08` 或 `签到 1/3 失败 08-08`，正文为按站点分组的每账号汇总。
@@ -150,7 +169,7 @@ GitHub Actions 通过 `actions/cache` 在两次运行间恢复/保存 `.runtime/
 
 | 渠道 | 需要设置的环境变量 |
 | --- | --- |
-| 邮箱 SMTP | `SMTP_SERVER`（如 `smtp.qq.com` 或 `smtp.qq.com:465`）、`SMTP_SSL`、`SMTP_EMAIL`、`SMTP_PASSWORD`（授权码）、`SMTP_NAME`；可选 `SMTP_STARTTLS`、`SMTP_PORT` |
+| 邮箱 SMTP | `SMTP_SERVER`（如 `smtp.qq.com` 或 `smtp.qq.com:465`）、`SMTP_SSL`、`SMTP_EMAIL`、`SMTP_PASSWORD`（授权码）、`SMTP_NAME`；可选 `SMTP_STARTTLS`、`SMTP_PORT`、`SMTP_TO` |
 | 钉钉机器人 | `DD_BOT_TOKEN`、`DD_BOT_SECRET` |
 | 企业微信机器人 | `QYWX_KEY` |
 | 飞书机器人 | `FSKEY` |
@@ -171,6 +190,8 @@ export SMTP_SSL='true'
 export SMTP_EMAIL='you@qq.com'
 export SMTP_PASSWORD='你的授权码'
 export SMTP_NAME='Auto Check In'
+# 可选：单独指定收件人邮箱，未设置时通知发给 SMTP_EMAIL 本身
+export SMTP_TO='receiver@example.com'
 ```
 
 SMTP 渠道支持三种连接方式：
@@ -179,7 +200,7 @@ SMTP 渠道支持三种连接方式：
 - `SMTP_STARTTLS=true`：先明文连接再升级 STARTTLS，默认端口 587；
 - 两者都未设置：自动探测，先尝试 587 STARTTLS，再尝试 465 隐式 SSL，最后 25 明文；连接层失败会自动切换，避免 `Connection unexpectedly closed` 这类因 SSL 模式与服务器不匹配导致的发送失败。认证失败等确定性错误不会重复尝试。
 
-`SMTP_SERVER` 可写成 `主机` 或 `主机:端口`，也可用 `SMTP_PORT` 单独指定端口；`SMTP_EMAIL` 的邮箱地址即发件人，无需另设收件人。
+`SMTP_SERVER` 可写成 `主机` 或 `主机:端口`，也可用 `SMTP_PORT` 单独指定端口；`SMTP_EMAIL` 的邮箱地址即发件人。可选 `SMTP_TO` 单独指定单收件人，未设置时通知发送给发件人自身。
 
 本地单独测试通知（不签到、不访问站点，也无需站点凭据）：
 

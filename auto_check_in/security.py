@@ -8,6 +8,7 @@ _SENSITIVE_COOKIE_RE = re.compile(
     r"(?i)((?:cf_clearance|[A-Za-z0-9]+_auth|auth))=[^;\s\"'&]+"
 )
 _HEX_TOKEN_RE = re.compile(r"\b[0-9a-f]{24,}\b")
+_PROXY_USERINFO_RE = re.compile(r"(?i)([A-Za-z][A-Za-z0-9+.-]*://)([^/@\s]+@)")
 
 
 def mask_username(username: str) -> str:
@@ -27,4 +28,5 @@ def redact_text(text: str) -> str:
         return text
     redacted = _SENSITIVE_COOKIE_RE.sub(r"\1=***", text)
     redacted = _HEX_TOKEN_RE.sub("***", redacted)
+    redacted = _PROXY_USERINFO_RE.sub(r"\1***@", redacted)
     return redacted
