@@ -1,0 +1,50 @@
+name: Proxy Connectivity Test (temp)
+
+on:
+  workflow_dispatch:
+    inputs:
+      proxies:
+        description: "逗号分隔代理列表（http://host:port），默认当前 SITE_SIJISHE_PROXY_URLS 的 12 个"
+        required: false
+        type: string
+        default: "http://72.10.160.170:6931,http://147.182.180.242:80,http://166.117.179.111:8080,http://72.240.9.63:80,http://147.28.240.215:443,http://5.2.228.168:56788,http://67.43.227.228:1571,http://202.61.204.51:80,http://72.10.160.170:31939,http://51.91.109.83:80,http://62.3.12.18:80,http://134.35.154.101:8080"
+      target:
+        description: "测试目标 URL"
+        required: false
+        type: string
+        default: "https://xsijishe.net/k_misign-sign.html"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Test proxies from runner
+        shell: bash
+        run: |
+          set -u
+          export TARGET="${{ inputs.target }}"
+          IFS=',' read -ra PROXIES <<< "${{ inputs.proxies }}"
+          : > /tmp/proxies.txt
+          for p in "${PROXIES[@]}"; do
+            echo "$p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' >> /tmp/proxies.txt
+          done
+          echo "== 待测代理数: $(wc -l < /tmp/proxies.txt) =="
+          cat /tmp/proxies.txt | xargs -P 10 -I{} bash -c '
+            p="{}"
+            code=$(curl -x "$p" -I -s --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "$TARGET" 2>/dev/null)
+            rc=$?
+            if [ "${code:-000}" != "000" ]; then
+              echo "OK   $p -> HTTP $code"
+            else
+              case $rc in
+                7)  echo "FAIL $p -> 代理不可达 (exit 7)";;
+                28) echo "FAIL $p -> 超时 (exit 28)";;
+                35|60) echo "FAIL $p -> TLS/证书 (exit $rc)";;
+                *)  echo "FAIL $p -> 无响应 (exit $rc)";;
+              esac
+            fi
+          ' | sort
