@@ -29,6 +29,7 @@ NO_CHANNELS = {
     "SMTP_EMAIL": "",
     "SMTP_PASSWORD": "",
     "SMTP_NAME": "",
+    "SMTP_TO": "",
     "CONSOLE": "",
     "SKIP_PUSH_TITLE": "",
 }
@@ -140,7 +141,7 @@ class FakeSMTP:
             raise smtplib.SMTPAuthenticationError(535, b"auth failed")
 
     def sendmail(self, from_addr, to_addrs, msg):
-        self.calls.append(("sendmail", from_addr, to_addrs))
+        self.calls.append(("sendmail", from_addr, to_addrs, msg))
 
     def quit(self):
         self.calls.append("quit")
@@ -269,6 +270,36 @@ class SmtpTests(unittest.TestCase):
         self.assertEqual(_parse_smtp_server("[::1]:587"), ("::1", 587))
         with self.assertRaises(ValueError):
             _parse_smtp_server("smtp.qq.com:notaport")
+
+    def _sendmail_call(self, client):
+        for call in client.calls:
+            if isinstance(call, tuple) and call[0] == "sendmail":
+                return call
+        self.fail("未找到 sendmail 调用")
+
+    def test_recipient_uses_smtp_to(self):
+        created = self._patch_smtp()
+        self._run(SMTP_TO="recipient@example.com")
+        client = created[0][1]
+        _, from_addr, to_addrs, msg = self._sendmail_call(client)
+        self.assertEqual(from_addr, "me@example.com")
+        self.assertEqual(to_addrs, "recipient@example.com")
+        self.assertIn(b"To: =?utf-8?q?Auto_Check_In?= <recipient@example.com>", msg)
+
+    def test_recipient_falls_back_to_sender(self):
+        created = self._patch_smtp()
+        self._run()
+        client = created[0][1]
+        _, from_addr, to_addrs, _ = self._sendmail_call(client)
+        self.assertEqual(from_addr, "me@example.com")
+        self.assertEqual(to_addrs, "me@example.com")
+
+    def test_from_stays_sender_when_recipient_set(self):
+        created = self._patch_smtp()
+        self._run(SMTP_TO="recipient@example.com")
+        client = created[0][1]
+        _, _, _, msg = self._sendmail_call(client)
+        self.assertIn(b"From: =?utf-8?q?Auto_Check_In?= <me@example.com>", msg)
 
 
 class NotifyOnlyCliTests(unittest.TestCase):

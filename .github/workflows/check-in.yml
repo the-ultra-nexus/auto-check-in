@@ -39,6 +39,7 @@ jobs:
       SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       SMTP_NAME: ${{ secrets.SMTP_NAME }}
+      SMTP_TO: ${{ secrets.SMTP_TO }}
     steps:
       - uses: actions/checkout@v4
 

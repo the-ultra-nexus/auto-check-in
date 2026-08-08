@@ -49,3 +49,7 @@ request_timeout_seconds = 15   # 单请求超时（CHECK_IN_REQUEST_TIMEOUT）
 retries = 3                    # 业务重试次数（CHECK_IN_RETRIES）
 retry_delay_seconds = 3.0      # 重试间隔秒（CHECK_IN_RETRY_DELAY）
 request_delay_seconds = 3.0    # 站点内账号间隔秒，0 关闭（CHECK_IN_REQUEST_DELAY）
+# 代理（可选，只走环境变量，禁止写入本文件）：
+#   CHECK_IN_PROXY_URLS         全局代理列表（逗号分隔，如 http://user:pass@host:port）
+#   SITE_<NAME>_PROXY_URLS      站点级代理列表，优先于全局
+# 仅作用于站点登录/签到流量，通知渠道不受影响；凭据会脱敏显示

@@ -17,6 +17,7 @@ from auto_check_in.config import (
     SiteConfig,
     load_config,
     parse_accounts,
+    parse_proxy_urls,
 )
 from auto_check_in.discuz import (
     classify_discuz_response,
@@ -215,6 +216,73 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("sites.sijishe.accounts", message)
         self.assertIn("SITE_SIJISHE_ACCOUNTS", message)
         self.assertIn("SITE_CONFIGS", message)
+
+    def test_global_proxy_urls_parsed(self):
+        path = write_config("")
+        config = load_config(
+            path,
+            {
+                "CHECK_IN_SITES": "sijishe",
+                "SITE_SIJISHE_BASE_URL": "https://a.example",
+                "SITE_SIJISHE_ACCOUNTS": "u&p",
+                "CHECK_IN_PROXY_URLS": "http://1.2.3.4:8080,http://5.6.7.8:3128",
+            },
+        )
+        self.assertEqual(
+            config.sites[0].network.proxy_urls,
+            ("http://1.2.3.4:8080", "http://5.6.7.8:3128"),
+        )
+
+    def test_site_proxy_overrides_global(self):
+        path = write_config("")
+        config = load_config(
+            path,
+            {
+                "CHECK_IN_SITES": "sijishe",
+                "SITE_SIJISHE_BASE_URL": "https://a.example",
+                "SITE_SIJISHE_ACCOUNTS": "u&p",
+                "CHECK_IN_PROXY_URLS": "http://1.2.3.4:8080",
+                "SITE_SIJISHE_PROXY_URLS": "http://9.9.9.9:9999",
+            },
+        )
+        self.assertEqual(config.sites[0].network.proxy_urls, ("http://9.9.9.9:9999",))
+
+    def test_invalid_proxy_url_rejected(self):
+        path = write_config("")
+        with self.assertRaises(ConfigError):
+            load_config(
+                path,
+                {
+                    "CHECK_IN_SITES": "sijishe",
+                    "SITE_SIJISHE_BASE_URL": "https://a.example",
+                    "SITE_SIJISHE_ACCOUNTS": "u&p",
+                    "CHECK_IN_PROXY_URLS": "ftp://1.2.3.4:21",
+                },
+            )
+
+    def test_proxy_urls_in_toml_rejected(self):
+        path = write_config("[network]\nproxy_urls = ['http://1.2.3.4:8080']\n")
+        with self.assertRaises(ConfigError):
+            load_config(
+                path,
+                {
+                    "CHECK_IN_SITES": "sijishe",
+                    "SITE_SIJISHE_BASE_URL": "https://a.example",
+                    "SITE_SIJISHE_ACCOUNTS": "u&p",
+                },
+            )
+
+    def test_parse_proxy_urls_validation(self):
+        self.assertEqual(parse_proxy_urls(None), ())
+        self.assertEqual(parse_proxy_urls("  "), ())
+        self.assertEqual(
+            parse_proxy_urls("http://u:p@1.2.3.4:8080, http://5.6.7.8:3128,,"),
+            ("http://u:p@1.2.3.4:8080", "http://5.6.7.8:3128"),
+        )
+        with self.assertRaises(ConfigError):
+            parse_proxy_urls("socks5://1.2.3.4:1080")
+        with self.assertRaises(ConfigError):
+            parse_proxy_urls("http://")
 
     def test_recognition_log_emitted(self):
         path = write_config("[runtime]\nenabled_sites = ['sijishe']\n")
@@ -455,6 +523,22 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("secret123", redacted)
         self.assertNotIn("token", redacted)
         self.assertIn("***", redacted)
+
+    def test_redact_proxy_credentials(self):
+        text = "代理 http://user:pass@1.2.3.4:8080 连接失败"
+        redacted = redact_text(text)
+        self.assertIn("http://***@1.2.3.4:8080", redacted)
+        self.assertNotIn("user:pass", redacted)
+
+    def test_proxy_redaction_covers_other_schemes_and_config_error(self):
+        from auto_check_in.config import ConfigError
+
+        try:
+            parse_proxy_urls("http://a:b@1.2.3.4:8080,socks5://u:p@9.9.9.9:9999")
+        except ConfigError as exc:
+            redacted = redact_text(str(exc))
+        self.assertIn("socks5://***@9.9.9.9:9999", redacted)
+        self.assertNotIn("u:p", redacted)
 
     def test_summary_excludes_credentials(self):
         summary = RunSummary([AccountResult("alice", CheckInStatus.LOGIN_FAILED, "SgL6_2132_auth=secret 失败")])

@@ -9,6 +9,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import urlsplit
 
 from .log import logger
 from .models import Account
@@ -21,6 +22,7 @@ _RUNTIME_KEYS = {"enabled_sites", "max_workers", "session_cache", "session_dir",
 _NOTIFICATION_KEYS = {"title", "enabled"}
 _SITE_KEYS = {"adapter", "base_url", "sign_path", "network"}
 _SENSITIVE_SITE_KEYS = {"accounts", "password", "passwd", "secret", "token", "cookie", "cookies"}
+_PROXY_SCHEMES = {"http", "https"}
 
 
 class ConfigError(ValueError):
@@ -33,6 +35,7 @@ class NetworkConfig:
     retries: int = 3
     retry_delay_seconds: float = 3.0
     request_delay_seconds: float = 3.0
+    proxy_urls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +115,30 @@ def parse_accounts(payload: str | None) -> tuple[Account, ...]:
     return tuple(accounts)
 
 
-def _network_from(raw: Mapping[str, object], env: Mapping[str, str]) -> NetworkConfig:
+def parse_proxy_urls(payload: str | None) -> tuple[str, ...]:
+    """Parse a comma-separated HTTP(S) proxy URL list without logging the payload."""
+    if not payload or not payload.strip():
+        return ()
+    proxies: list[str] = []
+    for index, raw in enumerate(payload.split(","), start=1):
+        value = raw.strip()
+        if not value:
+            continue
+        parsed = urlsplit(value)
+        if parsed.scheme not in _PROXY_SCHEMES or not parsed.netloc:
+            raise ConfigError(
+                f"第 {index} 个代理地址格式错误，应为 http://host:port "
+                f"或 http://user:pass@host:port: {value!r}"
+            )
+        proxies.append(value)
+    return tuple(proxies)
+
+
+def _network_from(
+    raw: Mapping[str, object],
+    env: Mapping[str, str],
+    proxy_urls: tuple[str, ...] = (),
+) -> NetworkConfig:
     network = NetworkConfig(
         request_timeout_seconds=_positive_int(
             _env(env, "CHECK_IN_REQUEST_TIMEOUT", str(raw.get("request_timeout_seconds", 15))),
@@ -128,6 +154,7 @@ def _network_from(raw: Mapping[str, object], env: Mapping[str, str]) -> NetworkC
         request_delay_seconds=float(
             _env(env, "CHECK_IN_REQUEST_DELAY", str(raw.get("request_delay_seconds", 3.0)))
         ),
+        proxy_urls=proxy_urls,
     )
     if network.request_delay_seconds < 0:
         raise ConfigError("CHECK_IN_REQUEST_DELAY 不能为负数")
@@ -155,6 +182,11 @@ def load_config(
     _warn_unknown("notification", notification_raw, _NOTIFICATION_KEYS)
     global_network_raw = raw.get("network", {}) if isinstance(raw.get("network"), dict) else {}
     _warn_unknown("network", global_network_raw, _NETWORK_KEYS)
+    if "proxy_urls" in global_network_raw:
+        raise ConfigError(
+            "代理地址不允许写入配置文件（检测到 [network] proxy_urls），"
+            "请使用 CHECK_IN_PROXY_URLS / SITE_<NAME>_PROXY_URLS 环境变量/Secret 提供"
+        )
     site_configs: dict[str, dict] = {}
     site_configs_raw = _env(env, "SITE_CONFIGS", "")
     if site_configs_raw:
@@ -231,7 +263,15 @@ def load_config(
             sign_path = str(json_cfg.get("sign_path") or section.get("sign_path", "/k_misign-sign.html"))
             site_network_raw = section.get("network", {}) if isinstance(section.get("network"), dict) else {}
             _warn_unknown(f"sites.{name}.network", site_network_raw, _NETWORK_KEYS)
+            if "proxy_urls" in site_network_raw:
+                raise ConfigError(
+                    f"站点 {name} 的代理地址不允许写入配置文件（检测到 sites.{name}.network.proxy_urls），"
+                    f"请使用 {prefix}PROXY_URLS 环境变量/Secret 提供"
+                )
             merged_network = {**global_network_raw, **site_network_raw}
+            proxy_urls = parse_proxy_urls(
+                _env(env, f"{prefix}PROXY_URLS", _env(env, "CHECK_IN_PROXY_URLS", ""))
+            )
             sites.append(
                 SiteConfig(
                     name=name,
@@ -239,7 +279,7 @@ def load_config(
                     base_url=base_url,
                     accounts=accounts,
                     sign_path=sign_path,
-                    network=_network_from(merged_network, env),
+                    network=_network_from(merged_network, env, proxy_urls),
                     session_cache=session_cache,
                     session_dir=session_dir,
                     session_max_age_seconds=session_max_age_seconds,
