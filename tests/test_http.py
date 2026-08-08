@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
+
+import requests
+from requests.exceptions import ProxyError
 
 from auto_check_in.config import NetworkConfig
 from auto_check_in.http import SessionProvider
@@ -34,6 +38,120 @@ class SessionProxyTests(unittest.TestCase):
         finally:
             for session in sessions:
                 session.close()
+
+
+class FailoverSessionTests(unittest.TestCase):
+    def _provider(self, proxies: tuple[str, ...]) -> SessionProvider:
+        return SessionProvider(NetworkConfig(proxy_urls=proxies))
+
+    def test_failover_rotates_to_next_proxy(self):
+        provider = self._provider(("http://1.2.3.4:8080", "http://5.6.7.8:3128"))
+        session = provider.new_session()
+        attempts: list[dict] = []
+
+        def fake_request(self_, method, url, **kwargs):
+            attempts.append(dict(self_.proxies))
+            if len(attempts) == 1:
+                raise ProxyError("Unable to connect to proxy")
+            return mock.Mock(status_code=200)
+
+        with mock.patch.object(requests.Session, "request", fake_request):
+            response = session.request("GET", "https://xsijishe.net")
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(
+                attempts,
+                [
+                    {"http": "http://1.2.3.4:8080", "https": "http://1.2.3.4:8080"},
+                    {"http": "http://5.6.7.8:3128", "https": "http://5.6.7.8:3128"},
+                ],
+            )
+            self.assertEqual(
+                session.proxies,
+                {"http": "http://5.6.7.8:3128", "https": "http://5.6.7.8:3128"},
+            )
+        finally:
+            session.close()
+
+    def test_session_sticks_to_working_proxy(self):
+        provider = self._provider(("http://1.2.3.4:8080", "http://5.6.7.8:3128"))
+        session = provider.new_session()
+        attempts: list[dict] = []
+
+        def fake_request(self_, method, url, **kwargs):
+            attempts.append(dict(self_.proxies))
+            if len(attempts) == 1:
+                raise ProxyError("Unable to connect to proxy")
+            return mock.Mock(status_code=200)
+
+        with mock.patch.object(requests.Session, "request", fake_request):
+            session.request("GET", "https://xsijishe.net")
+            session.request("GET", "https://xsijishe.net/k_misign-sign.html")
+        try:
+            self.assertEqual(len(attempts), 3)
+            self.assertEqual(
+                attempts[2],
+                {"http": "http://5.6.7.8:3128", "https": "http://5.6.7.8:3128"},
+            )
+        finally:
+            session.close()
+
+    def test_all_proxies_fail_raises_last_error(self):
+        provider = self._provider(("http://1.2.3.4:8080", "http://5.6.7.8:3128"))
+        session = provider.new_session()
+        attempts: list[dict] = []
+
+        def fake_request(self_, method, url, **kwargs):
+            attempts.append(dict(self_.proxies))
+            raise ProxyError("Unable to connect to proxy")
+
+        with mock.patch.object(requests.Session, "request", fake_request):
+            with self.assertRaises(ProxyError):
+                session.request("GET", "https://xsijishe.net")
+        try:
+            self.assertEqual(len(attempts), 2)
+        finally:
+            session.close()
+
+    def test_non_proxy_error_does_not_rotate(self):
+        provider = self._provider(("http://1.2.3.4:8080", "http://5.6.7.8:3128"))
+        session = provider.new_session()
+        attempts: list[dict] = []
+
+        def fake_request(self_, method, url, **kwargs):
+            attempts.append(dict(self_.proxies))
+            raise requests.exceptions.ConnectionError("boom")
+
+        with mock.patch.object(requests.Session, "request", fake_request):
+            with self.assertRaises(requests.exceptions.ConnectionError):
+                session.request("GET", "https://xsijishe.net")
+        try:
+            self.assertEqual(len(attempts), 1)
+            self.assertEqual(
+                session.proxies,
+                {"http": "http://1.2.3.4:8080", "https": "http://1.2.3.4:8080"},
+            )
+        finally:
+            session.close()
+
+    def test_failover_log_redacts_credentials(self):
+        provider = self._provider(("http://user:pass@1.2.3.4:8080", "http://5.6.7.8:3128"))
+        session = provider.new_session()
+
+        def fake_request(self_, method, url, **kwargs):
+            raise ProxyError("Unable to connect to proxy")
+
+        with mock.patch.object(requests.Session, "request", fake_request), self.assertLogs(
+            "auto_check_in", level="DEBUG"
+        ) as logs:
+            with self.assertRaises(ProxyError):
+                session.request("GET", "https://xsijishe.net")
+        text = "\n".join(logs.output)
+        try:
+            self.assertIn("http://***@1.2.3.4:8080", text)
+            self.assertNotIn("user:pass", text)
+        finally:
+            session.close()
 
 
 if __name__ == "__main__":

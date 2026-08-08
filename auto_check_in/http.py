@@ -5,6 +5,8 @@ from __future__ import annotations
 import random
 from typing import Any
 
+import requests
+
 from .config import NetworkConfig
 from .log import logger
 from .security import redact_text
@@ -35,6 +37,43 @@ def ua_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
     return headers
 
 
+class FailoverSession(requests.Session):
+    """A requests.Session that retries through the next proxy on proxy connection failure.
+
+    Once a proxy works it is kept for subsequent requests (sticky); rotation only
+    happens when the current proxy raises a proxy connection error
+    (``requests.exceptions.ProxyError``). When every proxy fails, the last error
+    is raised and the caller's existing failure handling (``site-unavailable``) applies.
+    """
+
+    def __init__(
+        self,
+        proxy_urls: tuple[str, ...] = (),
+        initial_proxy: str | None = None,
+    ) -> None:
+        super().__init__()
+        self._proxy_urls = proxy_urls
+        self._proxy_index = proxy_urls.index(initial_proxy) if initial_proxy in proxy_urls else 0
+        if initial_proxy:
+            self.proxies = {"http": initial_proxy, "https": initial_proxy}
+
+    def request(self, method: str, url: str, *args: Any, **kwargs: Any) -> Any:
+        if not self._proxy_urls:
+            return super().request(method, url, *args, **kwargs)
+        last_error: requests.exceptions.ProxyError | None = None
+        for _ in range(len(self._proxy_urls)):
+            proxy = self._proxy_urls[self._proxy_index % len(self._proxy_urls)]
+            self.proxies = {"http": proxy, "https": proxy}
+            try:
+                return super().request(method, url, *args, **kwargs)
+            except requests.exceptions.ProxyError as exc:
+                last_error = exc
+                logger.debug("proxy %s 连接失败，轮换到下一个代理", redact_text(proxy))
+                self._proxy_index += 1
+        assert last_error is not None
+        raise last_error
+
+
 class SessionProvider:
     """Creates HTTP sessions with shared UA/timeout defaults."""
 
@@ -52,12 +91,9 @@ class SessionProvider:
         return proxy
 
     def new_session(self) -> Any:
-        import requests
-
-        session = requests.Session()
-        session.headers.update({"User-Agent": random_user_agent()})
         proxy = self._next_proxy()
+        session = FailoverSession(self.network.proxy_urls, initial_proxy=proxy)
+        session.headers.update({"User-Agent": random_user_agent()})
         if proxy:
-            session.proxies = {"http": proxy, "https": proxy}
             logger.debug("session proxy=%s", redact_text(proxy))
         return session
