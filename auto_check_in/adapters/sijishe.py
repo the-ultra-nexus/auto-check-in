@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 
+import requests
 from lxml import etree
 
 from ..config import SiteConfig
@@ -17,7 +18,9 @@ from ..discuz import (
 )
 from ..errors import CheckInError, LoginError
 from ..http import SessionProvider, ua_headers
+from ..log import logger
 from ..models import Account, AccountResult, CheckInStatus
+from ..security import redact_text
 from ..session import load_cookies, save_cookies
 
 
@@ -72,8 +75,32 @@ class SijisheAdapter:
             return AccountResult(account.username, CheckInStatus.LOGIN_FAILED, str(exc))
         except CheckInError as exc:
             return AccountResult(account.username, CheckInStatus.CHECK_IN_FAILED, str(exc))
-        except Exception:
-            return AccountResult(account.username, CheckInStatus.ERROR, "运行过程中发生未预期错误")
+        except requests.RequestException as exc:
+            detail = redact_text(str(exc))[:200] or "网络请求失败"
+            logger.warning(
+                "site=%s account=%s 站点请求失败: %s",
+                self.config.name,
+                account.username,
+                detail,
+            )
+            return AccountResult(
+                account.username,
+                CheckInStatus.SITE_UNAVAILABLE,
+                f"站点请求失败：{detail}",
+            )
+        except Exception as exc:
+            detail = redact_text(str(exc))[:200] or "未知异常"
+            logger.warning(
+                "site=%s account=%s 运行异常: %s",
+                self.config.name,
+                account.username,
+                detail,
+            )
+            return AccountResult(
+                account.username,
+                CheckInStatus.ERROR,
+                f"运行过程中发生未预期错误：{detail}",
+            )
 
     def _restore_session(self, session: Any, username: str) -> None:
         if not self.config.session_cache:

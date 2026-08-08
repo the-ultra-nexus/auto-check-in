@@ -104,7 +104,7 @@ GitHub Actions 通过 `actions/cache` 在两次运行间恢复/保存 `.runtime/
 
 - 必需：`SITE_CONFIGS`（JSON Secret，包含全部站点的地址与账号）
 - 可选：仓库变量 `CHECK_IN_SITES`（逗号分隔，只运行部分站点；留空则运行 `SITE_CONFIGS` 里全部站点）
-- 按通知渠道选填：`BARK_PUSH`、`PUSH_KEY`、`FSKEY`、`TG_BOT_TOKEN`、`TG_USER_ID`、`DD_BOT_TOKEN`/`DD_BOT_SECRET`、`QYWX_KEY`、`SMTP_*`
+- 按通知渠道选填：`BARK_PUSH`、`PUSH_KEY`、`FSKEY`、`TG_BOT_TOKEN`、`TG_USER_ID`、`DD_BOT_TOKEN`/`DD_BOT_SECRET`、`QYWX_KEY`、`SMTP_SERVER`/`SMTP_SSL`/`SMTP_EMAIL`/`SMTP_PASSWORD`/`SMTP_NAME`（可选 `SMTP_STARTTLS`/`SMTP_PORT`）
 
 `SITE_CONFIGS` 示例：
 
@@ -131,7 +131,7 @@ GitHub Actions 通过 `actions/cache` 在两次运行间恢复/保存 `.runtime/
 
 | 渠道 | 需要设置的环境变量 |
 | --- | --- |
-| 邮箱 SMTP | `SMTP_SERVER`（如 `smtp.qq.com:465`）、`SMTP_SSL`、`SMTP_EMAIL`、`SMTP_PASSWORD`（授权码）、`SMTP_NAME` |
+| 邮箱 SMTP | `SMTP_SERVER`（如 `smtp.qq.com` 或 `smtp.qq.com:465`）、`SMTP_SSL`、`SMTP_EMAIL`、`SMTP_PASSWORD`（授权码）、`SMTP_NAME`；可选 `SMTP_STARTTLS`、`SMTP_PORT` |
 | 钉钉机器人 | `DD_BOT_TOKEN`、`DD_BOT_SECRET` |
 | 企业微信机器人 | `QYWX_KEY` |
 | 飞书机器人 | `FSKEY` |
@@ -144,7 +144,7 @@ GitHub Actions 通过 `actions/cache` 在两次运行间恢复/保存 `.runtime/
 | ntfy | `NTFY_TOPIC`（可选 `NTFY_URL`） |
 | 控制台输出 | `CONSOLE=true` |
 
-本地开启邮箱提醒示例：
+本地开启邮箱提醒示例（QQ 邮箱隐式 SSL，465 端口）：
 
 ```bash
 export SMTP_SERVER='smtp.qq.com:465'
@@ -153,6 +153,14 @@ export SMTP_EMAIL='you@qq.com'
 export SMTP_PASSWORD='你的授权码'
 export SMTP_NAME='Auto Check In'
 ```
+
+SMTP 渠道支持三种连接方式：
+
+- `SMTP_SSL=true`（也接受 `1` / `yes` / `on`，大小写不敏感）：隐式 SSL/TLS，默认端口 465；
+- `SMTP_STARTTLS=true`：先明文连接再升级 STARTTLS，默认端口 587；
+- 两者都未设置：自动探测，先尝试 587 STARTTLS，再尝试 465 隐式 SSL，最后 25 明文；连接层失败会自动切换，避免 `Connection unexpectedly closed` 这类因 SSL 模式与服务器不匹配导致的发送失败。认证失败等确定性错误不会重复尝试。
+
+`SMTP_SERVER` 可写成 `主机` 或 `主机:端口`，也可用 `SMTP_PORT` 单独指定端口；`SMTP_EMAIL` 的邮箱地址即发件人，无需另设收件人。
 
 本地单独测试通知（不签到、不访问站点，也无需站点凭据）：
 

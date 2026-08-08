@@ -5,6 +5,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+import requests
 
 from auto_check_in.adapters.sijishe import SijisheAdapter
 from auto_check_in.discuz import md5_password
@@ -80,6 +83,43 @@ class AdapterTests(unittest.TestCase):
         self.assertGreaterEqual(len(set(USER_AGENTS)), 3)
         for _ in range(20):
             self.assertIn(random_user_agent(), USER_AGENTS)
+
+    def test_unexpected_error_is_logged_and_surfaced(self):
+        session = FakeSession()
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("boom detail")
+
+        session.get = boom
+        adapter = SijisheAdapter(
+            make_site_config(session_cache=False),
+            session_factory=lambda: session,
+        )
+        with mock.patch("auto_check_in.adapters.sijishe.logger") as logger:
+            result = adapter.run(Account("alice", "pw"))
+        self.assertEqual(result.status, CheckInStatus.ERROR)
+        self.assertIn("运行过程中发生未预期错误", result.message)
+        self.assertIn("boom detail", result.message)
+        logger.warning.assert_called_once()
+        self.assertIn("boom detail", str(logger.warning.call_args))
+
+    def test_http_error_classified_as_site_unavailable(self):
+        session = FakeSession()
+
+        def boom(*args, **kwargs):
+            raise requests.HTTPError("403 Client Error: Forbidden for url")
+
+        session.get = boom
+        adapter = SijisheAdapter(
+            make_site_config(session_cache=False),
+            session_factory=lambda: session,
+        )
+        with mock.patch("auto_check_in.adapters.sijishe.logger") as logger:
+            result = adapter.run(Account("alice", "pw"))
+        self.assertEqual(result.status, CheckInStatus.SITE_UNAVAILABLE)
+        self.assertIn("站点请求失败", result.message)
+        self.assertIn("403", result.message)
+        logger.warning.assert_called_once()
 
 
 if __name__ == "__main__":
