@@ -109,7 +109,12 @@ GitHub Actions 通过 `actions/cache` 在两次运行间恢复/保存 `.runtime/
 
 - 必需：`SITE_CONFIGS`（JSON Secret，包含全部站点的地址与账号）
 - 可选：仓库变量 `CHECK_IN_SITES`（逗号分隔，只运行部分站点；留空则运行 `SITE_CONFIGS` 里全部站点）
+- 可选：`CHECK_IN_PROXY_URLS`（全局代理列表）、`SITE_SIJISHE_PROXY_URLS`（sijishe 站点级代理，优先于全局）
 - 按通知渠道选填：`BARK_PUSH`、`PUSH_KEY`、`FSKEY`、`TG_BOT_TOKEN`、`TG_USER_ID`、`DD_BOT_TOKEN`/`DD_BOT_SECRET`、`QYWX_KEY`、`SMTP_SERVER`/`SMTP_SSL`/`SMTP_EMAIL`/`SMTP_PASSWORD`/`SMTP_NAME`（可选 `SMTP_STARTTLS`/`SMTP_PORT`）
+
+完整的环境变量清单见仓库根目录 [.env.example](.env.example)（单一事实来源）：带 `# @ci:secrets` / `# @ci:vars`
+标记的变量为工作流已透传项，未标记变量仅本地使用。工作流 `env` 映射由 `tests/test_github_workflow.py` 双向校验，
+新增环境变量漏配或工作流引用了未声明的变量都会在 CI 中直接失败。
 
 `SITE_CONFIGS` 示例：
 
