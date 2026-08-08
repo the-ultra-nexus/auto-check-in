@@ -16,11 +16,11 @@ from ..discuz import (
     md5_password,
     parse_login_dialog,
 )
-from ..errors import CheckInError, LoginError
+from ..errors import CheckInError, LoginBlockedError, LoginError
 from ..http import SessionProvider, ua_headers
 from ..log import logger
 from ..models import Account, AccountResult, CheckInStatus
-from ..security import redact_text
+from ..security import mask_username, redact_text
 from ..session import load_cookies, save_cookies
 
 
@@ -71,6 +71,8 @@ class SijisheAdapter:
                     result = self._sign_in(session, base, account.username)
                 self._persist_session(session, account.username)
                 return result
+        except LoginBlockedError as exc:
+            return AccountResult(account.username, CheckInStatus.LOGIN_BLOCKED, str(exc))
         except LoginError as exc:
             return AccountResult(account.username, CheckInStatus.LOGIN_FAILED, str(exc))
         except CheckInError as exc:
@@ -80,7 +82,7 @@ class SijisheAdapter:
             logger.warning(
                 "site=%s account=%s 站点请求失败: %s",
                 self.config.name,
-                account.username,
+                mask_username(account.username),
                 detail,
             )
             return AccountResult(
@@ -93,7 +95,7 @@ class SijisheAdapter:
             logger.warning(
                 "site=%s account=%s 运行异常: %s",
                 self.config.name,
-                account.username,
+                mask_username(account.username),
                 detail,
             )
             return AccountResult(
@@ -128,8 +130,10 @@ class SijisheAdapter:
             timeout=self.config.network.request_timeout_seconds,
         )
         for _ in range(self.config.network.retries):
+            logger.debug("login step=dialog-fetch site=%s", self.config.name)
             dialog = self._fetch_dialog(session, base)
             form = parse_login_dialog(dialog)
+            logger.debug("login step=login-submit site=%s", self.config.name)
             self._post_login(session, base, sign_page, form, account)
             if self._is_logged_in(session, sign_page):
                 return
@@ -169,13 +173,26 @@ class SijisheAdapter:
             "answer": "",
             "cookietime": "2592000",
         }
+        logger.debug(
+            "login form fields: formhash=%s username=%s password_md5=%s",
+            "filled" if form.get("formhash") else "missing",
+            "filled" if account.username else "missing",
+            "filled" if account.password else "missing",
+        )
         response = session.post(
             url,
             data=data,
             headers=ua_headers({"Origin": base, "Referer": sign_page}),
             timeout=self.config.network.request_timeout_seconds,
         )
-        response.raise_for_status()
+        status_code = response.status_code
+        if status_code >= 400:
+            if 400 <= status_code < 500:
+                raise LoginBlockedError(
+                    f"登录提交被站点拒绝（HTTP {status_code}）：站点可能启用了防机器人校验"
+                    "或封禁了当前出口 IP，请核对账号密码并在本地验证"
+                )
+            response.raise_for_status()
 
     def _is_logged_in(self, session: Any, sign_page: str) -> bool:
         if any(cookie.name.endswith("_auth") and cookie.value for cookie in session.cookies):
@@ -195,6 +212,7 @@ class SijisheAdapter:
         return any(marker in html for marker in DISCUZ_ALREADY_MARKERS)
 
     def _sign_in(self, session: Any, base: str, username: str) -> AccountResult:
+        logger.debug("sign-in step=sign-in site=%s", self.config.name)
         sign_page = f"{base}{self.config.sign_path}"
         timeout = self.config.network.request_timeout_seconds
         last_message = ""

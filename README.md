@@ -16,11 +16,16 @@ uv run auto-check-in --config config/check-in.toml
 
 账号格式为 `账号&密码`，多个账号用换行或 `@` 分隔。站点地址和账号只从环境变量读取，禁止写入配置文件；`SITE_<NAME>_ACCOUNTS` 中多账号仍以换行/`@` 分隔。
 
-先验证配置而不访问站点：
+先验证配置而不访问站点（会输出每站已识别账号数与脱敏用户名，便于核对账号是否被识别）：
 
 ```bash
 uv run auto-check-in --config config/check-in.toml --dry-run
 ```
+
+> 提示：GitHub Actions 日志中 `account=***` 是 GitHub 对 Secret 的自动脱敏，**不代表账号未识别**。
+> 应用会在启动时输出 `site=<站点> accounts=<数量> recognized` 作为识别信号；逐账号日志使用脱敏用户名
+> （如 `account=1 username=sa***1`）。凭据经 Discuz 协议放在登录 POST 的请求体里，URL 上本就不出现
+> `username/password`，因此错误日志里的 URL 看不到账号是正常的。
 
 ## 运行流程
 
@@ -123,9 +128,23 @@ GitHub Actions 通过 `actions/cache` 在两次运行间恢复/保存 `.runtime/
 
 新增站点只需更新这一个 Secret，无需改动工作流。Secrets 只作为环境变量传递，不会被打印。本地或自建 workflow 仍可用每站独立变量 `SITE_<NAME>_BASE_URL` / `SITE_<NAME>_ACCOUNTS`，且优先于 `SITE_CONFIGS` 中同名站点。手动触发工作流时可在 “sites” 输入框临时指定站点（逗号分隔），留空则按仓库变量或全部站点运行。
 
+### 登录被拦截（`login-blocked`）
+
+当登录提交（`member.php?action=login&loginsubmit=yes`）返回 HTTP 4xx（典型 403）时，结果状态为
+“登录被拦截”。站点实际可达（登录弹框、formhash 均正常），只是登录提交被站点端拒绝，常见原因与排查：
+
+1. **站点 WAF / 防机器人**：对自动化登录做了风控。稍后重试、或换时段再跑一次看是否恢复。
+2. **出口 IP 被封**：GitHub runner 出口 IP 被站点封禁。可先在本机（住宅 IP）用相同凭据跑一次确认
+   `uv run auto-check-in --config config/check-in.toml --dry-run` 识别正常、实际运行能登录；
+   若本机正常而 CI 被拦，通常是 IP 问题，需换出口或与站点侧沟通。
+3. **凭据问题**：核对 `SITE_CONFIGS` Secret 与本地 `SITE_SIJISHE_ACCOUNTS` 是否一致、账号密码是否有效。
+
+排查时结合 `--debug` 日志：会记录失败步骤（`dialog-fetch` / `login-submit` / `sign-in`）与登录表单
+字段填充状态（仅字段名，不含任何值）。
+
 ## 通知方式
 
-通知由 `auto_check_in/notify.py` 统一发送，支持多个渠道同时启用；所有值都通过环境变量或 GitHub Secrets 注入，禁止写入配置文件。标题为短格式结果摘要，如 `签到 3/3 成功 08-08` 或 `签到 1/3 失败 08-08`，正文为按站点分组的每账号汇总。
+通知由 `auto_check_in/notify.py` 统一发送，支持多个渠道同时启用；所有值都通过环境变量或 GitHub Secrets 注入，禁止写入配置文件。文档、示例与规划文档中的账号一律使用占位符（如 `alice&secret`），禁止出现真实用户名/密码；真实凭据只存在于本机环境变量或 GitHub Secret 中。标题为短格式结果摘要，如 `签到 3/3 成功 08-08` 或 `签到 1/3 失败 08-08`，正文为按站点分组的每账号汇总。
 
 运行日志使用标准 `logging`：`CHECK_IN_LOG_LEVEL`（如 `DEBUG`）或 CLI 的 `--debug` 可打开调试日志，日志内容已脱敏。
 

@@ -20,6 +20,7 @@ _TOP_LEVEL_KEYS = {"runtime", "notification", "sites", "network", "enabled_sites
 _RUNTIME_KEYS = {"enabled_sites", "max_workers", "session_cache", "session_dir", "session_max_age_seconds"}
 _NOTIFICATION_KEYS = {"title", "enabled"}
 _SITE_KEYS = {"adapter", "base_url", "sign_path", "network"}
+_SENSITIVE_SITE_KEYS = {"accounts", "password", "passwd", "secret", "token", "cookie", "cookies"}
 
 
 class ConfigError(ValueError):
@@ -205,6 +206,11 @@ def load_config(
         try:
             prefix = _site_env_prefix(name)
             section = sites_raw.get(name, {}) if isinstance(sites_raw, dict) else {}
+            for key in sorted(_SENSITIVE_SITE_KEYS & set(section)):
+                raise ConfigError(
+                    f"站点 {name} 的账号凭据不允许写入配置文件（检测到 sites.{name}.{key}），"
+                    f"请使用 {prefix}ACCOUNTS 或 SITE_CONFIGS 环境变量/Secret 提供"
+                )
             _warn_unknown(f"sites.{name}", section, _SITE_KEYS)
             json_cfg = site_configs.get(name, {})
             adapter = _env(
@@ -243,6 +249,12 @@ def load_config(
             errors.append(str(exc))
     if errors:
         raise ConfigError("配置错误：\n" + "\n".join(errors))
+    for site in sites:
+        logger.info(
+            "site=%s accounts=%d recognized",
+            site.name,
+            len(parse_accounts(site.accounts)),
+        )
 
     max_workers = _positive_int(
         _env(

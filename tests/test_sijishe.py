@@ -122,5 +122,47 @@ class AdapterTests(unittest.TestCase):
         logger.warning.assert_called_once()
 
 
+    def test_login_post_403_maps_to_login_blocked(self):
+        session = FakeSession()
+        session.login_post_response = FakeResponse("", status=403)
+        adapter = SijisheAdapter(
+            make_site_config(session_cache=False),
+            session_factory=lambda: session,
+        )
+        with self.assertLogs("auto_check_in", level="DEBUG") as logs:
+            result = adapter.run(Account("alice", "pw"))
+        self.assertEqual(result.status, CheckInStatus.LOGIN_BLOCKED)
+        self.assertIn("登录提交被站点拒绝（HTTP 403）", result.message)
+        self.assertIn("防机器人", result.message)
+        self.assertNotIn("alice", result.message)
+        output = "\n".join(logs.output)
+        self.assertIn("login step=dialog-fetch", output)
+        self.assertIn("login step=login-submit", output)
+        self.assertIn(
+            "login form fields: formhash=filled username=filled password_md5=filled",
+            output,
+        )
+        self.assertNotIn("pw", output)
+
+    def test_sign_in_http_error_503_stays_site_unavailable(self):
+        session = FakeSession()
+
+        def boom(*args, **kwargs):
+            raise requests.HTTPError("503 Server Error: Service Unavailable for url")
+
+        session.get = boom
+        adapter = SijisheAdapter(
+            make_site_config(session_cache=False),
+            session_factory=lambda: session,
+        )
+        with mock.patch("auto_check_in.adapters.sijishe.logger") as logger:
+            result = adapter.run(Account("alice", "pw"))
+        self.assertEqual(result.status, CheckInStatus.SITE_UNAVAILABLE)
+        self.assertIn("站点请求失败", result.message)
+        self.assertIn("503", result.message)
+        self.assertNotIn("登录提交", result.message)
+        logger.warning.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

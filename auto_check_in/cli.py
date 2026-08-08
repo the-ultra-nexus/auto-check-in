@@ -9,7 +9,7 @@ from datetime import date
 from .config import ConfigError, load_config, load_notify_settings, parse_accounts
 from .log import setup_logging
 from .runner import run
-from .security import redact_text
+from .security import mask_username, redact_text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,7 +57,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run:
             for site in config.sites:
                 accounts = parse_accounts(site.accounts)
-                print(f"站点[{site.name}] 配置有效，已解析 {len(accounts)} 个账号")
+                masked = ", ".join(mask_username(account.username) for account in accounts)
+                print(
+                    f"站点[{site.name}] 配置有效，已解析 {len(accounts)} 个账号: {masked}"
+                )
             return 0
         summary = run(config)
         output = redact_text(summary.render())

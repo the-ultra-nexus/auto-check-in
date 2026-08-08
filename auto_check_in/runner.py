@@ -11,6 +11,7 @@ from .adapters import ADAPTERS
 from .config import CheckInConfig, ConfigError, SiteConfig, parse_accounts
 from .log import logger
 from .models import AccountResult, CheckInStatus, RunSummary
+from .security import mask_username
 
 
 def _run_site(
@@ -21,8 +22,8 @@ def _run_site(
     results: list[AccountResult] = []
     delay = site.network.request_delay_seconds
     site_started = time.perf_counter()
-    for index, account in enumerate(parse_accounts(site.accounts)):
-        if index > 0 and delay > 0:
+    for index, account in enumerate(parse_accounts(site.accounts), start=1):
+        if index > 1 and delay > 0:
             jitter = delay * random.uniform(-0.2, 0.2)
             time.sleep(max(0.0, delay + jitter))
         try:
@@ -31,9 +32,10 @@ def _run_site(
             elapsed = time.perf_counter() - started
             results.append(replace(result, site=site.name))
             logger.info(
-                "site=%s account=%s status=%s duration=%.2fs",
+                "site=%s account=%d username=%s status=%s duration=%.2fs",
                 site.name,
-                account.username,
+                index,
+                mask_username(account.username),
                 result.status.value,
                 elapsed,
             )
