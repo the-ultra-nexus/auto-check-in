@@ -8,6 +8,7 @@ import hmac
 import os
 import re
 import smtplib
+import ssl
 import threading
 import time
 import urllib.parse
@@ -24,6 +25,14 @@ TIMEOUT = 15
 
 def _env(name: str) -> str:
     return os.environ.get(name, "") or ""
+
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _truthy(value: str) -> bool:
+    """Lenient boolean parse for env flags (1/true/yes/on, case-insensitive)."""
+    return value.strip().lower() in _TRUTHY
 
 
 def _headers() -> dict[str, str]:
@@ -172,24 +181,119 @@ def ntfy(title: str, content: str) -> None:
     )
 
 
+_SMTP_DEFINITIVE_ERRORS = (
+    smtplib.SMTPAuthenticationError,
+    smtplib.SMTPRecipientsRefused,
+    smtplib.SMTPSenderRefused,
+    smtplib.SMTPDataError,
+)
+
+
+def _parse_smtp_server(server: str) -> tuple[str, int | None]:
+    """Split ``SMTP_SERVER`` into ``(host, port)``, supporting ``host`` / ``host:port``."""
+    host = server.strip()
+    if host.startswith("[") and "]" in host:
+        end = host.index("]")
+        hostname = host[1:end]
+        remainder = host[end + 1 :]
+        if remainder.startswith(":"):
+            return hostname, int(remainder[1:])
+        return hostname, None
+    if host.count(":") == 1:
+        hostname, port_text = host.rsplit(":", 1)
+        if not port_text.isdigit():
+            raise ValueError(f"SMTP_SERVER 端口无效: {server!r}")
+        return hostname.strip(), int(port_text)
+    return host, None
+
+
+def _smtp_attempts(
+    host: str,
+    port: int | None,
+    port_override: str,
+    use_ssl: bool,
+    use_starttls: bool,
+) -> list[tuple[str, int]]:
+    """Return ordered ``(mode, port)`` connection attempts for the SMTP channel.
+
+    Modes: ``ssl`` (implicit TLS, e.g. 465), ``starttls`` (STARTTLS, e.g. 587),
+    ``plain`` (unencrypted). When neither ``SMTP_SSL`` nor ``SMTP_STARTTLS`` is
+    enabled, the channel tries the most likely mode first and falls back on
+    connection-level failures so a mismatched server/flag combination still works.
+    Port priority: ``SMTP_PORT`` > port embedded in ``SMTP_SERVER`` > mode default.
+    """
+    explicit = int(port_override) if port_override else port
+    if use_ssl:
+        return [("ssl", explicit or 465)]
+    if use_starttls:
+        return [("starttls", explicit or 587)]
+    if explicit:
+        if explicit == 465:
+            return [("ssl", 465), ("starttls", 465), ("plain", 465)]
+        if explicit == 587:
+            return [("starttls", 587), ("plain", 587), ("ssl", 587)]
+        return [("starttls", explicit), ("plain", explicit), ("ssl", explicit)]
+    return [("starttls", 587), ("ssl", 465), ("plain", 25)]
+
+
+def _smtp_send(
+    host: str,
+    port: int,
+    mode: str,
+    email: str,
+    password: str,
+    message: MIMEText,
+) -> None:
+    """Connect in one mode and send the message, raising on any failure."""
+    if mode == "ssl":
+        client = smtplib.SMTP_SSL(host, port, timeout=TIMEOUT)
+    else:
+        client = smtplib.SMTP(host, port, timeout=TIMEOUT)
+        client.ehlo()
+        if mode == "starttls":
+            if not client.has_extn("starttls"):
+                raise smtplib.SMTPServerDisconnected("服务器未提供 STARTTLS")
+            client.starttls(context=ssl.create_default_context())
+            client.ehlo()
+    try:
+        client.login(email, password)
+        client.sendmail(email, email, message.as_bytes())
+    finally:
+        try:
+            client.quit()
+        except Exception:
+            client.close()
+
+
 def smtp(title: str, content: str) -> None:
     server = _env("SMTP_SERVER")
-    use_ssl = _env("SMTP_SSL").lower() == "true"
+    use_ssl = _truthy(_env("SMTP_SSL"))
+    use_starttls = _truthy(_env("SMTP_STARTTLS"))
     email = _env("SMTP_EMAIL")
     password = _env("SMTP_PASSWORD")
     name = _env("SMTP_NAME")
     if not server or not email or not password or not name:
         return
+    port_override = _env("SMTP_PORT")
+    if port_override and not port_override.isdigit():
+        raise ValueError(f"SMTP_PORT 无效: {port_override!r}")
+    host, port = _parse_smtp_server(server)
     message = MIMEText(content, "plain", "utf-8")
     message["Subject"] = Header(title, "utf-8")
     message["From"] = formataddr((Header(name, "utf-8").encode(), email))
     message["To"] = formataddr((Header(name, "utf-8").encode(), email))
-    client = smtplib.SMTP_SSL(server, timeout=TIMEOUT) if use_ssl else smtplib.SMTP(server, timeout=TIMEOUT)
-    try:
-        client.login(email, password)
-        client.sendmail(email, email, message.as_bytes())
-    finally:
-        client.close()
+    attempts = _smtp_attempts(host, port, port_override, use_ssl, use_starttls)
+    last_error: Exception | None = None
+    for mode, target_port in attempts:
+        try:
+            _smtp_send(host, target_port, mode, email, password, message)
+            return
+        except _SMTP_DEFINITIVE_ERRORS:
+            raise
+        except Exception as exc:  # 连接层错误：尝试下一种模式
+            last_error = exc
+    if last_error is not None:
+        raise last_error
 
 
 CHANNELS = (bark, serverJ, telegram, dingtalk, feishu, qywx_bot, pushplus, pushdeer, webhook, ntfy, smtp, console)
