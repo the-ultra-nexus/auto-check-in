@@ -36,18 +36,20 @@
 - [覆盖率检查失败会阻断定时签到] → 正是 fail-loud 设计：补上映射后重跑即恢复，避免静默失效。
 - [`.env.example` 标记本身可能漏列未来新变量] → 由 README 同步、`--check-sources` 类源码扫描（后续可选）与代码评审约束；测试只保证已标记变量不漏映射。
 - [未标记变量实际被工作流引用] → 反向校验会报“工作流引用了 `.env.example` 未声明的变量”，强制补声明。
+- [新增文件被 `.gitignore` 静默忽略] → 新文件必须确认被 git 跟踪（`git status` 显示 `A`/`M`）；本次 `.env.example` 即被 `.env.*` 规则吞掉，由 CI 的 env 一致性检查在 checkout 后拦截，修复为增加 `!.env.example` 例外。
 - [代理 Secret 配置错误/失效] → 沿用现有 `site-unavailable` 状态与通知机制暴露，本变更不改变该行为。
 
 ## Migration Plan
 
 1. 修改 `.github/workflows/check-in.yml`：`env` 增加两个代理变量映射，新增 “Verify env coverage” step。
-2. 新增 `.env.example`：收录 `config.py` / `notify.py` 读取的全部环境变量与 `SITE_<NAME>_*` 动态前缀说明，CI 必透传的加 `# @ci:secrets` / `# @ci:vars` 标记。
+2. 新增 `.env.example`：收录 `config.py` / `notify.py` 读取的全部环境变量与 `SITE_<NAME>_*` 动态前缀说明，CI 必透传的加 `# @ci:secrets` / `# @ci:vars` 标记；同时 `.gitignore` 增加 `!.env.example` 例外，确保文件能被提交。
 3. 新增 `tests/test_github_workflow.py`（stdlib unittest，双向校验 + 正反例）。
 4. 更新 `README.md`：补充 `.env.example` 指引与代理 Secrets 清单。
 5. 本地验证：`uv run python -m unittest tests.test_github_workflow -v`，再跑全量 `uv run python -m unittest discover -s tests -v`。
 6. 手动触发 `workflow_dispatch` 确认工作流绿色；仓库 Settings 无需改动（代理 Secret 按需配置）。
-7. 回滚：仅涉及工作流、`.env.example`、测试与 README，直接 revert 即可，无数据/凭据迁移。
+7. 回滚：仅涉及工作流、`.env.example`、`.gitignore`、测试与 README，直接 revert 即可，无数据/凭据迁移。
 
 ## Open Questions
 
 - 是否顺带映射未启用的通知渠道（`PUSH_PLUS`、PushDeer、Webhook、ntfy）？当前不在启用范围，建议留作独立需求。
+- 是否引入 pre-commit 钩子，把全量测试与 env 一致性检查从“推送后 CI”提前到“提交前本地”？本次遗漏证明本地测试拦不住 git 静默忽略，钩子可作为后续增强。

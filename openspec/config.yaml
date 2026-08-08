@@ -21,3 +21,4 @@ rules:
     - Identify Selenium, OCR, network, scheduler, and notification effects.
   tasks:
     - Include automated verification where feasible and a manual integration verification step when site behavior changes.
+    - New files added by a change MUST be confirmed tracked by git (git status shows A/M, not silently ignored by .gitignore); "exists locally" does not equal "committed".

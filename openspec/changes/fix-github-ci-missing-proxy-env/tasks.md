@@ -21,3 +21,8 @@
 - [x] 4.1 本地运行 `uv run python -m unittest tests.test_github_workflow -v` 通过
 - [x] 4.2 本地运行全量 `uv run python -m unittest discover -s tests -v` 无回归
 - [ ] 4.3 手动触发 `workflow_dispatch` 验证工作流绿色；未配置代理 Secret 时签到与通知行为不回归
+
+## 5. 教训固化
+
+- [x] 5.1 `.gitignore` 的 `.env.*` 之后增加 `!.env.example` 例外（真实的本地 `.env` 仍被忽略），修复 `.env.example` 被 git 静默忽略、CI checkout 缺文件的问题
+- [x] 5.2 教训：新增文件必须确认被 git 跟踪——`git status` 应显示 `A`/`M` 而非被忽略；“本地存在”不等于“已提交”，本地测试无法发现提交遗漏，CI 检查会在 checkout 后兜底
