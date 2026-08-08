@@ -9,6 +9,7 @@ CI 运行 31254588184 显示：配置了多个代理时，会话只尝试当前 
 - 非代理类失败（站点 HTTP 状态、站点层错误等）不触发轮换，保持现有行为。
 - 全部代理都失败时抛出最后一个错误，账号按现有机制以 `site-unavailable` 体现。
 - 无新增环境变量或配置项：复用现有 `SITE_<NAME>_PROXY_URLS` / `CHECK_IN_PROXY_URLS` 列表，`.env.example` 与工作流 `env` 无需改动。
+- 站点会话禁用环境代理合并（`trust_env=False`）：shell 的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 不再劫持站点请求；站点流量只走运行时配置的代理列表，未配置时直连。修复“本地配置了代理却实际走本地 Clash 直连”的假象，使本地行为与 CI 一致、失败轮换可在本地被真实验证。
 
 ## Capabilities
 

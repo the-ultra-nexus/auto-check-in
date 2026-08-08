@@ -44,6 +44,8 @@ class FailoverSession(requests.Session):
     happens when the current proxy raises a proxy connection error
     (``requests.exceptions.ProxyError``). When every proxy fails, the last error
     is raised and the caller's existing failure handling (``site-unavailable``) applies.
+    Ambient environment proxies (``HTTP_PROXY`` / ``HTTPS_PROXY`` / ``ALL_PROXY``) are
+    ignored so site traffic only ever uses the configured proxy list.
     """
 
     def __init__(
@@ -52,6 +54,7 @@ class FailoverSession(requests.Session):
         initial_proxy: str | None = None,
     ) -> None:
         super().__init__()
+        self.trust_env = False
         self._proxy_urls = proxy_urls
         self._proxy_index = proxy_urls.index(initial_proxy) if initial_proxy in proxy_urls else 0
         if initial_proxy:

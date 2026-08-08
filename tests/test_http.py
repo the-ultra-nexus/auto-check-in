@@ -44,6 +44,13 @@ class FailoverSessionTests(unittest.TestCase):
     def _provider(self, proxies: tuple[str, ...]) -> SessionProvider:
         return SessionProvider(NetworkConfig(proxy_urls=proxies))
 
+    def test_site_session_ignores_ambient_env_proxies(self):
+        session = self._provider(("http://1.2.3.4:8080",)).new_session()
+        try:
+            self.assertFalse(session.trust_env)
+        finally:
+            session.close()
+
     def test_failover_rotates_to_next_proxy(self):
         provider = self._provider(("http://1.2.3.4:8080", "http://5.6.7.8:3128"))
         session = provider.new_session()

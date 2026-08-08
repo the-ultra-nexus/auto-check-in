@@ -18,3 +18,14 @@ When a site request through the current proxy fails because the proxy itself is 
 #### Scenario: No rotation on site-level failure
 - **WHEN** the site returns an HTTP error response through the working proxy
 - **THEN** the runtime does not rotate to another proxy
+
+### Requirement: Site sessions ignore ambient environment proxies
+The runtime SHALL disable environment proxy merging (`trust_env = False`) on site sessions, so ambient shell proxies such as `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` never hijack site traffic. Site requests SHALL use only the configured proxy list (`SITE_<NAME>_PROXY_URLS` / `CHECK_IN_PROXY_URLS`) and SHALL connect directly when no proxy is configured.
+
+#### Scenario: Ambient proxy does not override configured proxy
+- **WHEN** the shell environment has `HTTPS_PROXY` set and a site session is configured with a proxy list
+- **THEN** site requests use only the configured proxy and are not routed through the ambient `HTTPS_PROXY`
+
+#### Scenario: Direct connection when no proxy configured
+- **WHEN** no site proxy is configured but the shell environment has `HTTP_PROXY` / `HTTPS_PROXY` set
+- **THEN** site requests connect directly instead of using the ambient environment proxy

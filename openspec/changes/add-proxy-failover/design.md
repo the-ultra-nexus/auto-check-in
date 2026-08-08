@@ -32,19 +32,22 @@
 
 5. **日志脱敏**：每次轮换输出 DEBUG 日志，代理地址经 `redact_text()` 脱敏，凭据永不进日志。
 
+6. **站点会话禁用环境代理合并（`trust_env=False`）**：requests 默认 `trust_env=True` 会把 shell 的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 合并进 session。实测本地设置了 `SITE_SIJISHE_PROXY_URLS=http://83.168.105.19:8005`（该代理不可达）时请求仍成功——实际走的是本地 Clash（`127.0.0.1:7897`），代理列表与失败轮换完全没被用到。关闭 `trust_env` 后站点流量只走运行时自己的代理列表，未配置则直连，与 CI 行为一致。备选方案：要求用户本地清空环境代理变量 → 治标不治本、容易漏，弃用。通知渠道不走站点会话，不受影响。
+
 ## Risks / Trade-offs
 
 - [轮换使单请求最坏耗时变长] → 每个代理每请求至多尝试一次，全部失败后仍按现有重试与退出语义；最坏耗时 ≈ retries × 代理数 × 超时，先观察实际表现，后续可加轮换上限配置。
 - [切换出口 IP 可能触发站点风控] → 粘性设计保证同一会话尽量同一代理，仅在代理连接失败（而非站点拒绝）时才切换。
 - [ProxyError 判定过宽/过窄] → 触发条件限定为代理连接类错误，测试覆盖正反例；若后续出现其他代理故障形态（如代理返回 5xx），再扩展触发集合。
 - [轮换日志泄露凭据] → 复用 `redact_text()` 脱敏，测试断言日志不含凭据子串。
+- [本地 shell 环境代理（`HTTP_PROXY`/`HTTPS_PROXY`）劫持站点请求] → 站点会话 `trust_env=False`，代理只来自运行时配置；测试断言会话关闭环境代理合并。
 
 ## Migration Plan
 
-1. `http.py` 新增 `FailoverSession`，`SessionProvider.new_session()` 返回它（无代理时行为与普通 Session 一致）。
+1. `http.py` 新增 `FailoverSession`（禁用环境代理合并 `trust_env=False`），`SessionProvider.new_session()` 返回它（无代理时行为与普通 Session 一致）。
 2. `tests/test_http.py` 增加用例（mock `requests.Session.request`）：失败轮换成功、全部失败抛错、粘性、非代理错误不轮换、无代理行为不变。
 3. 本地验证：`uv run python -m unittest discover -s tests -v` 全量通过，`compileall` 通过。
-4. 手动集成：`SITE_SIJISHE_PROXY_URLS` 配置"1 个坏代理 + 1 个好代理"，本地或 CI 试运行确认自动切换后签到成功；全部坏代理时确认 `site-unavailable`。
+4. 手动集成：`SITE_SIJISHE_PROXY_URLS` 配置“1 个坏代理 + 1 个好代理”，本地或 CI 试运行确认自动切换后签到成功；本地可在列表末尾加 `http://127.0.0.1:7897` 作为好代理验证自动切换；全部坏代理时确认 `site-unavailable`。
 5. 回滚：仅涉及 `http.py` 与测试文件，直接 revert 即可，无数据/凭据迁移。
 
 ## Open Questions
