@@ -111,7 +111,6 @@ GitHub Actions 通过 `actions/cache` 在两次运行间恢复/保存 `.runtime/
 ```json
 {
   "sijishe": {
-    "adapter": "sijishe",
     "base_url": "https://xsijishe.net",
     "accounts": "账号1&密码1@账号2&密码2"
   },
@@ -154,6 +153,14 @@ export SMTP_EMAIL='you@qq.com'
 export SMTP_PASSWORD='你的授权码'
 export SMTP_NAME='Auto Check In'
 ```
+
+本地单独测试通知（不签到、不访问站点，也无需站点凭据）：
+
+```bash
+uv run auto-check-in --notify-only
+```
+
+会向所有已启用渠道发送一条测试通知并在控制台列出启用渠道；无任何渠道启用或通知被关闭（`CHECK_IN_NOTIFY=false`）时返回退出码 2。`--notify-only` 与 `--dry-run`、`--no-notify` 互斥。
 
 GitHub Actions 使用时，把对应值配置为仓库 Secret，并在工作流 `env` 中映射（工作流已内置邮箱、钉钉、飞书、Server 酱、Telegram、企业微信机器人和 Bark 的映射）。如需跳过某个标题的推送可设置 `SKIP_PUSH_TITLE`。
 

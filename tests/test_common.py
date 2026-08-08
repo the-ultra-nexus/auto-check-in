@@ -111,6 +111,8 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual([site.name for site in config.sites], ["sijishe", "site2"])
         self.assertEqual(config.sites[0].base_url, "https://a.example")
+        # SITE_CONFIGS 省略 adapter 时回退到与站点同名的适配器
+        self.assertEqual(config.sites[0].adapter, "sijishe")
         self.assertEqual(config.sites[1].adapter, "custom")
 
     def test_site_configs_invalid_json(self):
