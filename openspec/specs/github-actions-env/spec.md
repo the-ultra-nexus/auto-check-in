@@ -7,9 +7,9 @@ The GitHub Actions workflow `env` mapping MUST stay consistent with the CI envir
 ### Requirement: GitHub Actions env mapping covers documented CI variables
 The GitHub Actions workflow SHALL map every CI environment variable marked `# @ci:secrets` or `# @ci:vars` in `.env.example` into the job `env` with the matching source, so configuration set in repository settings actually reaches the process. The reverse SHALL also hold: every `secrets.X` / `vars.X` referenced in a workflow SHALL be declared in `.env.example` with a matching marker.
 
-#### Scenario: Proxy secrets are mapped
+#### Scenario: Proxy pool secret is mapped
 - **WHEN** the job `env` of `.github/workflows/check-in.yml` is inspected
-- **THEN** it contains `CHECK_IN_PROXY_URLS` and `SITE_SIJISHE_PROXY_URLS` sourced from `secrets`
+- **THEN** it contains `CHECK_IN_PROXY_POOL_URLS` sourced from `secrets` and does not reference the removed static proxy variables `CHECK_IN_PROXY_URLS` / `SITE_SIJISHE_PROXY_URLS`
 
 #### Scenario: Missing marked variable fails coverage
 - **WHEN** a variable marked `@ci:secrets` or `@ci:vars` in `.env.example` is absent from the workflow `env`
