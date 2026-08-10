@@ -224,7 +224,9 @@ CI 缓存卫生（工作流内置步骤）：
 
 - `Inspect session cache`：恢复后列出 `.runtime/sessions` 的文件数与总大小；
 - `Prepare cache save`：无会话文件时跳过保存，避免产生空的缓存条目；
-- `Verify cache reuse`：恢复命中但应用报告零恢复或零保存时输出 `::warning`（含缓存 key 与计数），提示缓存未被使用。
+- `Verify cache reuse`：恢复命中但应用报告零恢复或零保存时输出 `::error` 并使该次运行失败（含缓存 key 与计数），缓存未被使用不再静默通过。
+
+2026-08-10 实测：定时运行连续恢复 10 个 cookie 且 `rejected=0`、直接以“今日已签到”完成（无重新登录），会话缓存跨运行复用成立；故 `Verify cache reuse` 采用严格模式（零复用即失败）。
 
 ## GitHub Actions
 
