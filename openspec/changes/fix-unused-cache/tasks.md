@@ -30,8 +30,8 @@
 ## 5. 验证与决策
 
 - [x] 5.1 本地：`uv run auto-check-in --config config/check-in.toml --debug`（或 FakeSession 驱动的测试路径）确认日志出现 session-cache restore/save 事件与 summary 计数行
-- [ ] 5.2 CI：`workflow_dispatch` 手动触发一次，确认 Inspect / Prepare / Verify 步骤输出符合 spec（命中缓存但零复用时出现 warning）
-- [ ] 5.3 观测窗口：连续 ≥3 次定时运行，记录每次 `restored` / `rejected` / `saved` 计数
-- [ ] 5.4 决策分支 A（`saved=0` 或 `rejected == restored`，站点会话不跨运行）：移除 restore/save 与 Verify 步骤，同步 README / spec / `openspec/config.yaml`，收尾 `runtime-reliability` 相关需求
-- [ ] 5.5 决策分支 B（出现复用成功）：`Verify cache reuse` 从 warning 升级为 fail（`cache-hit` 但零复用即失败），README 记录观测结论
+- [x] 5.2 CI：`workflow_dispatch` 手动触发一次，确认 Inspect / Prepare / Verify 步骤输出符合 spec（命中缓存但零复用时出现 warning）
+- [x] 5.3 观测窗口：连续 ≥3 次定时运行，记录每次 `restored` / `rejected` / `saved` 计数（已记录 1 个有效点：run 1 `restored=1 / rejected=0 / saved=1`，会话复用成功、无重新登录；经用户确认提前关闭观测窗口，直接走分支 B）
+- [ ] 5.4 决策分支 A（`saved=0` 或 `rejected == restored`，站点会话不跨运行）：移除 restore/save 与 Verify 步骤，同步 README / spec / `openspec/config.yaml`，收尾 `runtime-reliability` 相关需求（未采用：观测显示会话可复用）
+- [x] 5.5 决策分支 B（出现复用成功）：`Verify cache reuse` 从 warning 升级为 fail（`cache-hit` 但零复用即失败），README 记录观测结论
 - [x] 5.6 回滚：revert 即可，无数据迁移；旧会话文件格式兼容（本 change 不改 cookie JSON 结构）

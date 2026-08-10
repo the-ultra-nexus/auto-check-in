@@ -17,4 +17,4 @@ The workflow SHALL restore the latest session cache and save a fresh entry witho
 
 #### Scenario: Unused cache is surfaced
 - **WHEN** the cache restore step reports a hit but the runtime reports zero restored sessions or zero newly saved sessions
-- **THEN** the workflow emits a warning naming the cache key and the observed counters
+- **THEN** the workflow fails the job with an error naming the cache key and the observed counters

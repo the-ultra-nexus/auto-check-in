@@ -40,7 +40,7 @@
 5. **根因决策路径（观测驱动）**：遥测上线后连续 ≥3 次定时运行：
    - 若 `saved=0` → 登录在 CI 被拦/未产生 `*_auth` cookie（与代理/IP 有关），缓存无物可存 → 移除 restore/save 步骤并同步 README/spec。
    - 若 `restored>0` 且 `rejected == restored` → 站点会话不跨运行（IP 绑定或服务端失效）→ 移除 restore/save 步骤（保留遥测计数，日志/通知仍显示每次重登），README 明确“CI 缓存已移除”的结论与依据。
-   - 若 `rejected < restored` 或出现复用成功 → 保留缓存，`Verify cache reuse` 从 warning 升级为 fail（任何 `cache-hit` 但零复用即失败）。
+   - 若 `rejected < restored` 或出现复用成功 → 保留缓存，`Verify cache reuse` 从 warning 升级为 fail（任何 `cache-hit` 但零复用即失败）。**2026-08-10 已按此分支落地**：观测到恢复 10 个 cookie、`rejected=0`、直接“今日已签到”（无重登），确认复用成立后升级为严格模式。
    - 决策不写死在代码里：判定标准落在 tasks 的验证清单，由实施者在观测窗口结束后选择保留/移除分支。
 6. **不新增 env 与配置项**：遥测默认开启，日志级别沿用现有 `CHECK_IN_LOG_LEVEL` / `--debug`；工作流新步骤为 CI 专属脚本，无配置面。`.env.example` 与 `tests/test_github_workflow.py` 无需改动（env 面零变化）。
 7. **文档同步**：`README.md` 会话缓存章节补充遥测行格式与 CI 校验/跳过空保存说明；`openspec/config.yaml` context 补充“会话缓存可观测性与 CI 校验”边界（本 change 触及全局运行时行为，按规则同步）。
