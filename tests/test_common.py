@@ -28,7 +28,7 @@ from auto_check_in.http import USER_AGENTS, SessionProvider, ua_headers
 from auto_check_in.models import AccountResult, CheckInStatus, RunSummary
 from auto_check_in.runner import run
 from auto_check_in.security import mask_username, redact_text
-from auto_check_in.session import load_cookies, save_cookies, session_path
+from auto_check_in.session import SessionCacheStats, load_cookies, save_cookies, session_path
 
 from helpers import ANON_SIGN_PAGE, DIALOG, write_config
 
@@ -471,6 +471,28 @@ class SessionProviderTests(unittest.TestCase):
 
 
 class RunnerTests(unittest.TestCase):
+    def test_session_cache_stats_aggregated_from_adapters(self):
+        class StatsAdapter:
+            def __init__(self, config):
+                self.config = config
+                self.session_cache_stats = SessionCacheStats(
+                    restored=1,
+                    rejected=1,
+                    saved=1,
+                )
+
+            def run(self, account):
+                return AccountResult(account.username, CheckInStatus.SUCCESS)
+
+        config = CheckInConfig(
+            sites=(SiteConfig("s", "stats", "https://a.example", "u&p"),),
+            max_workers=1,
+        )
+        summary = run(config, adapter_types={"stats": StatsAdapter})
+        self.assertEqual(summary.sessions_restored, 1)
+        self.assertEqual(summary.sessions_rejected, 1)
+        self.assertEqual(summary.sessions_saved, 1)
+
     def test_parallel_sites_with_failure_isolation(self):
         class GoodAdapter:
             def __init__(self, config):

@@ -19,6 +19,12 @@ context: |
   working proxy. Session-level failures (page loads with HTTP 200 but login-failed)
   do NOT trigger pool acquisition; they trigger cookie clear + re-login.
   Login sessions are cached on disk and reused until expiry, then re-login.
+  Session-cache reuse is observable: per-account restore/persist events are logged
+  (usernames masked, cookie values never logged) and restored/rejected/saved
+  counters are aggregated per site into the run summary; CI inspects the cache
+  content, skips empty saves, and warns when a restored cache is not reused.
+  SessionCacheStats is single-threaded per adapter instance; the runner merges
+  per-site stats.
   Notification delivery is provided by auto_check_in.notify through multiple channels.
   Credentials, cookies, API tokens, and proxy pool URLs must be supplied through
   environment variables / GitHub Secrets; never place them in the repository or in

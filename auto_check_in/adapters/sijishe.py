@@ -22,7 +22,7 @@ from ..http import SessionProvider, ua_headers
 from ..log import logger
 from ..models import Account, AccountResult, CheckInStatus
 from ..security import mask_username, redact_text
-from ..session import load_cookies, save_cookies
+from ..session import SessionCacheStats, load_cookies, save_cookies
 
 
 class SijisheAdapter:
@@ -41,6 +41,11 @@ class SijisheAdapter:
             direct_first=config.direct_first,
             probe_url=f"{config.base_url.rstrip('/')}{config.sign_path}",
         )
+        self._stats = SessionCacheStats()
+
+    @property
+    def session_cache_stats(self) -> SessionCacheStats:
+        return self._stats
 
     @contextmanager
     def _new_session(self) -> Iterator[Any]:
@@ -66,11 +71,18 @@ class SijisheAdapter:
             with self._new_session() as session:
                 base = self.config.base_url.rstrip("/")
                 sign_page = f"{base}{self.config.sign_path}"
-                self._restore_session(session, account.username)
+                restored = self._restore_session(session, account.username)
                 if not self._is_logged_in(session, sign_page):
                     self._login(session, base, account)
                 result = self._sign_in(session, base, account.username)
                 if result.status is CheckInStatus.LOGIN_FAILED:
+                    if restored:
+                        self._stats = self._stats.bump(rejected=1)
+                        logger.info(
+                            "session-cache site=%s account=%s event=rejected",
+                            self.config.name,
+                            mask_username(account.username),
+                        )
                     session.cookies.clear()
                     self._login(session, base, account)
                     result = self._sign_in(session, base, account.username)
@@ -109,23 +121,57 @@ class SijisheAdapter:
                 f"运行过程中发生未预期错误：{detail}",
             )
 
-    def _restore_session(self, session: Any, username: str) -> None:
+    def _restore_session(self, session: Any, username: str) -> bool:
         if not self.config.session_cache:
-            return
-        for name, value in load_cookies(
+            return False
+        cookies = load_cookies(
             self.config.session_dir,
             self.config.name,
             username,
             self.config.session_max_age_seconds,
-        ).items():
+        )
+        if cookies:
+            self._stats = self._stats.bump(restored=1)
+            logger.info(
+                "session-cache site=%s account=%s event=restored cookies=%d",
+                self.config.name,
+                mask_username(username),
+                len(cookies),
+            )
+        else:
+            logger.info(
+                "session-cache site=%s account=%s event=restore-miss",
+                self.config.name,
+                mask_username(username),
+            )
+        for name, value in cookies.items():
             session.cookies.set(name, value)
+        return bool(cookies)
 
     def _persist_session(self, session: Any, username: str) -> None:
         if not self.config.session_cache:
+            logger.info(
+                "session-cache site=%s account=%s event=persist-skipped reason=disabled",
+                self.config.name,
+                mask_username(username),
+            )
             return
         cookies = session.cookies.get_dict()
-        if any(name.endswith("_auth") and value for name, value in cookies.items()):
-            save_cookies(self.config.session_dir, self.config.name, username, cookies)
+        if not any(name.endswith("_auth") and value for name, value in cookies.items()):
+            logger.info(
+                "session-cache site=%s account=%s event=persist-skipped reason=no-auth-cookie",
+                self.config.name,
+                mask_username(username),
+            )
+            return
+        save_cookies(self.config.session_dir, self.config.name, username, cookies)
+        self._stats = self._stats.bump(saved=1)
+        logger.info(
+            "session-cache site=%s account=%s event=saved cookies=%d",
+            self.config.name,
+            mask_username(username),
+            len(cookies),
+        )
 
     def _login(self, session: Any, base: str, account: Account) -> None:
         sign_page = f"{base}{self.config.sign_path}"

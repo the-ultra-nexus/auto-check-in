@@ -60,6 +60,7 @@ jobs:
         run: uv run python -m unittest tests.test_github_workflow -v
 
       - name: Restore session cache
+        id: restore
         uses: actions/cache/restore@v4
         with:
           path: .runtime/sessions
@@ -67,11 +68,49 @@ jobs:
           restore-keys: |
             sessions-${{ runner.os }}-${{ github.ref }}-
 
+      - name: Inspect session cache
+        run: |
+          if [ -d .runtime/sessions ] && [ "$(find .runtime/sessions -type f | wc -l | tr -d ' ')" -gt 0 ]; then
+            echo "session_files=$(find .runtime/sessions -type f | wc -l | tr -d ' ')"
+            echo "session_size=$(du -sh .runtime/sessions | cut -f1)"
+            find .runtime/sessions -type f -printf '%f %s bytes\n'
+          else
+            echo "session_files=0"
+            echo "session_size=0B"
+          fi
+
       - name: Run check-in
-        run: uv run auto-check-in --config config/check-in.toml
+        run: |
+          set -o pipefail
+          mkdir -p .runtime
+          uv run auto-check-in --config config/check-in.toml | tee .runtime/check-in-output.txt
+
+      - name: Verify cache reuse
+        if: steps.restore.outputs.cache-hit == 'true'
+        run: |
+          counters=$(sed -n 's/.*会话缓存: 恢复 \([0-9][0-9]*\) \/ 被拒重登 \([0-9][0-9]*\) \/ 新保存 \([0-9][0-9]*\).*/\1 \2 \3/p' .runtime/check-in-output.txt | tail -n1)
+          if [ -z "$counters" ]; then
+            echo "::warning title=Unused session cache::cache-hit=true but no session-cache counters in output (key: ${{ steps.restore.outputs.cache-matched-key }})"
+          else
+            restored=$(printf '%s\n' "$counters" | awk '{print $1}')
+            rejected=$(printf '%s\n' "$counters" | awk '{print $2}')
+            saved=$(printf '%s\n' "$counters" | awk '{print $3}')
+            if [ "$restored" = "0" ] || [ "$saved" = "0" ]; then
+              echo "::warning title=Unused session cache::cache-hit=true restored=$restored rejected=$rejected saved=$saved (key: ${{ steps.restore.outputs.cache-matched-key }})"
+            fi
+          fi
+
+      - name: Prepare cache save
+        id: prepare
+        run: |
+          if [ -d .runtime/sessions ] && [ "$(find .runtime/sessions -type f | wc -l | tr -d ' ')" -gt 0 ]; then
+            echo "skip=false"
+          else
+            echo "skip=true"
+          fi
 
       - name: Save session cache
-        if: always()
+        if: always() && steps.prepare.outputs.skip != 'true'
         uses: actions/cache/save@v4
         with:
           path: .runtime/sessions

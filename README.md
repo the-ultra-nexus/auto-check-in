@@ -218,6 +218,14 @@ uv run auto-check-in --config config/check-in.toml --dry-run
 
 GitHub Actions 通过 `actions/cache` 在两次运行间恢复/保存 `.runtime/sessions`（工作流已内置）。注意 runner 出口 IP 可能变化导致 cookie 失效，此时会自动重新登录，功能不受影响。
 
+会话缓存可观测：每次运行按账号记录 `session-cache` 日志（`event=restored` / `restore-miss` / `rejected` / `saved` / `persist-skipped`，账号脱敏、不含 cookie 值），汇总输出末尾追加固定格式行 `会话缓存: 恢复 N / 被拒重登 N / 新保存 N`，通知一并携带，可直接判断缓存是否真正被复用。
+
+CI 缓存卫生（工作流内置步骤）：
+
+- `Inspect session cache`：恢复后列出 `.runtime/sessions` 的文件数与总大小；
+- `Prepare cache save`：无会话文件时跳过保存，避免产生空的缓存条目；
+- `Verify cache reuse`：恢复命中但应用报告零恢复或零保存时输出 `::warning`（含缓存 key 与计数），提示缓存未被使用。
+
 ## GitHub Actions
 
 工作流位于 [.github/workflows/check-in.yml](.github/workflows/check-in.yml)，每天 08:00（Asia/Shanghai）运行，亦可在 Actions 页面手动触发。请在仓库 Settings → Secrets and variables → Actions 中设置：
