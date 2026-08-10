@@ -60,6 +60,9 @@ class AccountResult:
 @dataclass(slots=True)
 class RunSummary:
     results: list[AccountResult] = field(default_factory=list)
+    sessions_restored: int = 0
+    sessions_rejected: int = 0
+    sessions_saved: int = 0
 
     @property
     def failed(self) -> list[AccountResult]:
@@ -83,6 +86,12 @@ class RunSummary:
         for site, items in groups.items():
             lines.append(f"【{site}】")
             lines.extend(item.summary_line() for item in items)
+        if self.sessions_restored or self.sessions_rejected or self.sessions_saved:
+            lines.append(
+                f"会话缓存: 恢复 {self.sessions_restored}"
+                f" / 被拒重登 {self.sessions_rejected}"
+                f" / 新保存 {self.sessions_saved}"
+            )
         return "\n".join(lines)
 
     def title_head(self) -> str:

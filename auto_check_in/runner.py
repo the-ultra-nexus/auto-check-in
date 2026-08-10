@@ -12,12 +12,13 @@ from .config import CheckInConfig, ConfigError, SiteConfig, parse_accounts
 from .log import logger
 from .models import AccountResult, CheckInStatus, RunSummary
 from .security import mask_username
+from .session import SessionCacheStats
 
 
 def _run_site(
     site: SiteConfig,
     adapter_types: dict[str, type],
-) -> list[AccountResult]:
+) -> tuple[list[AccountResult], SessionCacheStats]:
     adapter = adapter_types[site.adapter](site)
     results: list[AccountResult] = []
     delay = site.network.request_delay_seconds
@@ -54,7 +55,8 @@ def _run_site(
         len(results),
         time.perf_counter() - site_started,
     )
-    return results
+    stats = getattr(adapter, "session_cache_stats", None) or SessionCacheStats()
+    return results, stats
 
 
 def run(
@@ -73,6 +75,7 @@ def run(
         parse_accounts(site.accounts)
 
     results: list[AccountResult] = []
+    stats_list: list[SessionCacheStats] = []
     workers = min(config.max_workers, len(config.sites))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
@@ -81,7 +84,9 @@ def run(
         for future in as_completed(futures):
             site = futures[future]
             try:
-                results.extend(future.result())
+                site_results, site_stats = future.result()
+                results.extend(site_results)
+                stats_list.append(site_stats)
             except Exception:
                 results.append(
                     AccountResult(
@@ -91,4 +96,11 @@ def run(
                         site=site.name,
                     )
                 )
-    return RunSummary(results)
+                stats_list.append(SessionCacheStats())
+    stats = SessionCacheStats.merge(*stats_list)
+    return RunSummary(
+        results,
+        sessions_restored=stats.restored,
+        sessions_rejected=stats.rejected,
+        sessions_saved=stats.saved,
+    )
