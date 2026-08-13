@@ -28,16 +28,24 @@ the rest conversationally.
 
 ## Spec files to populate
 
+### Backend guidelines (delivered 2026-08-13)
 
-### Backend guidelines
+实际交付 8 份规范文件（见 `.trellis/spec/backend/`）：
 
 | File | What to document |
 |------|------------------|
-| `.trellis/spec/backend/directory-structure.md` | Where different file types go (routes, services, utils) |
-| `.trellis/spec/backend/database-guidelines.md` | ORM, migrations, query patterns, naming conventions |
-| `.trellis/spec/backend/error-handling.md` | How errors are caught, logged, and returned |
-| `.trellis/spec/backend/logging-guidelines.md` | Log levels, format, what to log |
-| `.trellis/spec/backend/quality-guidelines.md` | Code review standards, testing requirements |
+| `.trellis/spec/backend/directory-structure.md` | 包布局、职责边界、新增适配器流程、公共 API |
+| `.trellis/spec/backend/configuration.md` | 配置来源优先级、敏感键拒绝、校验模式、新增配置项清单 |
+| `.trellis/spec/backend/error-handling.md` | 异常层次、状态枚举、适配器不抛业务异常、退出码 |
+| `.trellis/spec/backend/logging-guidelines.md` | logger 设置、级别、结构化 key=value、脱敏铁律 |
+| `.trellis/spec/backend/network-and-proxy.md` | 直连优先、按需分批代理、失败轮换、池参数与约束 |
+| `.trellis/spec/backend/session-cache.md` | cookie 会话缓存：格式、原子写、生命周期、可观测性、CI 契约 |
+| `.trellis/spec/backend/notification-channels.md` | 通道注册表、纯函数约定、SMTP 探测、新增通道流程 |
+| `.trellis/spec/backend/quality-guidelines.md` | 语言/工具链、代码风格、凭据安全、测试要求、禁止模式 |
+
+> 模板中的 `database-guidelines.md` 已删除：本项目无数据库（持久化仅 `.runtime/sessions/`
+> cookie 缓存，约定并入 session-cache.md）；`configuration.md` / `network-and-proxy.md` /
+> `notification-channels.md` 为 gap 分析后新增（各有专门测试文件支撑）。
 
 
 ### Thinking guides (already populated)

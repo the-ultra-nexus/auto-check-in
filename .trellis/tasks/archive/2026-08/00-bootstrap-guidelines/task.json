@@ -12,10 +12,10 @@
   "assignee": "ultra-nexus",
   "createdAt": "2026-08-13",
   "completedAt": "2026-08-13",
-  "branch": null,
+  "branch": "the-ultra-nexus/feature-to-trellis",
   "base_branch": null,
   "worktree_path": null,
-  "commit": null,
+  "commit": "d74bcd2",
   "pr_url": null,
   "subtasks": [],
   "children": [],
@@ -23,6 +23,6 @@
   "relatedFiles": [
     ".trellis/spec/backend/"
   ],
-  "notes": "First-time setup task created by trellis init (backend project)",
+  "notes": "Spec bootstrap 完成：8 份规范从真实代码库填充；gap 分析新增 configuration/network-and-proxy/notification-channels，删除不适用的 database-guidelines（无数据库）；session-cache 独立成文（fix-unused-cache 系列高信号主题）。",
   "meta": {}
 }
