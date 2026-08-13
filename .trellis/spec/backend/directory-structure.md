@@ -1,8 +1,8 @@
-# Directory Structure
+# 目录结构
 
 > 单包 Python 项目（`auto_check_in/`），配置驱动、按站点适配器扩展。
 
-## Overview
+## 概述
 
 这是一个 **单仓库单包** 项目（非 monorepo）：全部运行时代码在 `auto_check_in/` 包内，
 每个站点由独立适配器实现登录与签到，通过 `ADAPTERS` 注册表按名称分发。

@@ -1,4 +1,4 @@
-# Network & Proxy Guidelines
+# 网络与代理规范
 
 > 网络容错核心：直连优先（direct-first）探测、按需分批代理补给、失败轮换、粘性直连。
 > 涉及 `auto_check_in/http.py`（FailoverSession / SessionProvider）与 `auto_check_in/pool.py`。

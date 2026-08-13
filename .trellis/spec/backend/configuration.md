@@ -1,4 +1,4 @@
-# Configuration Guidelines
+# 配置规范
 
 > 配置系统的单一入口：`auto_check_in/config.py`。TOML 只放非敏感默认，凭据一律环境变量，
 > 严格校验、未知键警告、错误聚合。改动配置前先读本文件与 `tests/test_common.py`。

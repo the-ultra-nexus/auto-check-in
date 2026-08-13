@@ -1,4 +1,4 @@
-# Logging Guidelines
+# 日志规范
 
 > 标准库 `logging`，结构化 `key=value` 日志行，全程凭据脱敏。
 

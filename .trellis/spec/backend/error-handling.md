@@ -1,4 +1,4 @@
-# Error Handling
+# 错误处理
 
 > 分层错误模型：异常只在适配器内部出现，跨层边界一律转成 `AccountResult` + `CheckInStatus`。
 

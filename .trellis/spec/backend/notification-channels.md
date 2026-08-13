@@ -1,4 +1,4 @@
-# Notification Channels
+# 通知通道规范
 
 > 通知通道注册表：按环境变量启用、纯函数无全局可变状态、每渠道独立超时、并发发送互不影响。
 > 唯一实现：`auto_check_in/notify.py`（测试 `tests/test_notify.py`，全库最大测试文件）。

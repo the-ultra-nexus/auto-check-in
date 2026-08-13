@@ -1,4 +1,4 @@
-# Session Cache Guidelines
+# 会话缓存规范
 
 > Cookie 会话缓存：跨运行复用有效登录态，失效自动重登，全程可观测（本项目的"持久层"）。
 

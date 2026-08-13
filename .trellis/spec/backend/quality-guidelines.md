@@ -1,4 +1,4 @@
-# Quality Guidelines
+# 质量规范
 
 > 代码质量标准：Python 3.12 + uv、不可变数据类、依赖最小化、凭据安全、unittest。
 
