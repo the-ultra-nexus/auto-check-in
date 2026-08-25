@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         summary = run(config)
         output = redact_text(summary.render())
         print(output)
-        if config.notify and not args.no_notify:
+        if config.notify and not args.no_notify and not summary.successful:
             try:
                 from auto_check_in.notify import send
 
