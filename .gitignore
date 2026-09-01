@@ -25,3 +25,6 @@ after_sign.png
 config/local.toml
 config/*.secret.toml
 network-requests-*.json
+
+# pi-subagents 运行时产物（由扩展自动生成，勿提交）
+.pi/subagents/
