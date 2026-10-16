@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest import mock
 
@@ -18,21 +19,20 @@ TWO_NODE_YAML = (
 )
 
 
-def _run(subscription: str, work: Path, fetch, group_pick, delays=None) -> tuple[int, str]:
-    """跑 setup，返回 (退出码, mihomo 最终选中的节点)。"""
+def _run(subscription: str, work: Path, fetch, pick) -> tuple[int, str]:
+    """跑 setup，返回 (退出码, mihomo 最终选中的节点)。pick 是 pick_fastest 的替身。"""
 
     def fetch_writing(url: str, dest: Path) -> None:
         dest.write_text(TWO_NODE_YAML, encoding="utf-8")
 
     with mock.patch.object(proxy_setup, "_core_binary", return_value=Path("/bin/true")), \
          mock.patch.object(proxy_setup, "_fetch_subscription", side_effect=fetch or fetch_writing), \
-         mock.patch.object(proxy_setup, "_wait_for_group", side_effect=group_pick), \
-         mock.patch.object(proxy_setup, "_group_delays", return_value=delays or {}), \
+         mock.patch.object(proxy_setup, "pick_fastest", side_effect=pick), \
          mock.patch.object(proxy_setup.subprocess, "Popen") as popen, \
          mock.patch.object(proxy_setup.time, "sleep"):
         popen.return_value.poll.return_value = None  # None = 进程还活着
         code = setup(subscription, work, 7890, 9090)
-    return code, (group_pick.return_value if hasattr(group_pick, "return_value") else "")
+    return code, (pick.return_value if hasattr(pick, "return_value") else "")
 
 
 class SubscriptionsTests(unittest.TestCase):
@@ -58,7 +58,7 @@ class FallbackTests(unittest.TestCase):
                     raise ProxySetupError("订阅内容过小，可能拉取失败")
                 dest.write_text(TWO_NODE_YAML, encoding="utf-8")
 
-            code, _ = _run("", Path(directory) / "work", fetch, lambda *_: "n1")
+            code, _ = _run("", Path(directory) / "work", fetch, lambda *_: ("n1", 100))
             self.assertEqual(code, 0)
             # 只走到第二个源就成功，第三个不应再被请求
             self.assertEqual(seen, list(proxy_setup.DEFAULT_SUBSCRIPTIONS[:2]))
@@ -66,7 +66,7 @@ class FallbackTests(unittest.TestCase):
     def test_all_sources_failing_reports_every_attempt(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(ProxySetupError) as caught:
-                _run("", Path(directory) / "work", None, lambda *_: "")
+                _run("", Path(directory) / "work", None, lambda *_: None)
             message = str(caught.exception)
             for url in proxy_setup.DEFAULT_SUBSCRIPTIONS:
                 self.assertIn(url, message)
@@ -77,7 +77,7 @@ class FallbackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "work"
             with self.assertRaises(ProxySetupError):
-                _run("", root, None, lambda *_: "")
+                _run("", root, None, lambda *_: None)
             self.assertEqual(
                 sorted(p.name for p in root.iterdir() if p.is_dir()),
                 [f"sub{i}" for i in range(len(proxy_setup.DEFAULT_SUBSCRIPTIONS))],
@@ -87,7 +87,7 @@ class FallbackTests(unittest.TestCase):
         """用户指定单个源时不建子目录，保持原有路径约定。"""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "work"
-            code, _ = _run(GOOD, root, None, lambda *_: "n1")
+            code, _ = _run(GOOD, root, None, lambda *_: ("n1", 100))
             self.assertEqual(code, 0)
             self.assertTrue((root / "config.yaml").exists())
             self.assertEqual([p.name for p in root.iterdir() if p.is_dir()], [])
@@ -151,6 +151,22 @@ class SwitchNodeTests(unittest.TestCase):
         with mock.patch.object(proxy_setup, "_api", return_value={"dead": 0, "alive": 500}), \
              mock.patch.object(proxy_setup, "api_select"):
             self.assertEqual(proxy_setup.switch_to_next(9090, set()), "alive")
+
+    def test_health_check_url_is_sent_to_mihomo(self):
+        """测速必须用签到页做健康检查，不能退回 plugin.php。"""
+        seen: list[str] = []
+
+        def fake_api(_port, path, _payload=None):
+            seen.append(path)
+            return {"n": 100}
+
+        with mock.patch.object(proxy_setup, "_api", side_effect=fake_api), \
+             mock.patch.object(proxy_setup, "api_select"):
+            proxy_setup.pick_fastest(9090)
+
+        self.assertTrue(seen, "应发出一次测速请求")
+        self.assertIn("group/GLOBAL/delay", seen[0], "必须以组测速接口为准")
+        self.assertIn("k_misign-sign.html", urllib.parse.unquote(seen[0]))
 
 
 if __name__ == "__main__":

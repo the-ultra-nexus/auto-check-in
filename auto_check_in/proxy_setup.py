@@ -56,8 +56,6 @@ API_PORT = 9090
 # 真过了 Cloudflare 的节点里挑，返回 403 质询页的节点会被直接排除。
 HEALTH_CHECK_URL = "https://xsijishe.net/k_misign-sign.html"
 HEALTH_TIMEOUT_MS = 5000
-# url-test 组在测速过程中 now 会是这些占位值，不是真实节点名。
-_PSEUDO_NODES = {"", "COMPATIBLE", "DIRECT", "REJECT", "PASS", "GLOBAL"}
 
 
 class ProxySetupError(RuntimeError):
@@ -87,7 +85,9 @@ def _group_delays(api_port: int) -> dict[str, int]:
     """Ask mihomo to re-test the whole group **in parallel**; return node → ms.
 
     This is the parallel sweep: one call tests every node at once, instead of
-    the serial per-node probing that made picking a node so slow.
+    the serial per-node probing that made picking a node so slow. It is also the
+    only trustworthy signal — the group's ``now`` just echoes the first node in
+    the list until a test runs, and the group's own ``history`` stays empty.
     """
     import urllib.parse
 
@@ -101,24 +101,27 @@ def _group_delays(api_port: int) -> dict[str, int]:
         return {}
 
 
-def _wait_for_group(api_port: int, timeout: float = 90.0) -> str:
-    """Block until url-test settles, then return the node it picked.
+def _ranked_nodes(api_port: int, exclude: set[str] | None = None) -> list[tuple[int, str]]:
+    """Parallel-test every node; return ``[(ms, name)]`` fastest first.
 
-    ``now`` flaps while the parallel sweep is still running, so require the same
-    value twice in a row before trusting it.
+    Nodes that failed the health check come back as 0 or missing, and are dropped.
     """
-    deadline = time.time() + timeout
-    previous = None
-    while time.time() < deadline:
-        try:
-            now = _api(api_port, "/proxies/GLOBAL").get("now") or ""
-        except Exception:
-            now = ""
-        if now not in _PSEUDO_NODES and now == previous:
-            return now
-        previous = now
-        time.sleep(1)
-    return ""
+    excluded = exclude or set()
+    return sorted(
+        (ms, name)
+        for name, ms in _group_delays(api_port).items()
+        if isinstance(ms, int) and ms > 0 and name not in excluded
+    )
+
+
+def pick_fastest(api_port: int, exclude: set[str] | None = None) -> tuple[str, int] | None:
+    """Choose and switch to the fastest healthy node, or ``None`` when none is left."""
+    ranked = _ranked_nodes(api_port, exclude)
+    if not ranked:
+        return None
+    ms, name = ranked[0]
+    api_select(api_port, name)
+    return name, ms
 
 
 def switch_to_next(api_port: int, exclude: set[str]) -> str | None:
@@ -127,17 +130,8 @@ def switch_to_next(api_port: int, exclude: set[str]) -> str | None:
     Used when Cloudflare blocks the chosen node mid-run: the free pool has plenty
     of nodes, so switching beats waiting.
     """
-    delays = _group_delays(api_port)
-    candidates = sorted(
-        (ms, name)
-        for name, ms in delays.items()
-        if isinstance(ms, int) and ms > 0 and name not in exclude
-    )
-    if not candidates:
-        return None
-    chosen = candidates[0][1]
-    api_select(api_port, chosen)
-    return chosen
+    picked = pick_fastest(api_port, exclude)
+    return picked[0] if picked else None
 
 
 def _download(url: str, dest: Path, timeout: int = 120) -> None:
@@ -246,15 +240,14 @@ def _setup_one(
     if process.poll() is not None:
         raise ProxySetupError(f"mihomo 启动失败，见 {work / 'mihomo.log'}")
     try:
-        # url-test 组启动后自动并行测速全部节点，等到它稳定下来。
-        chosen = _wait_for_group(api_port)
-        if chosen:
-            delays = _group_delays(api_port)
-            latency = delays.get(chosen, 0)
+        # 并行测速全部节点并切到最快的一个（url-test 组自身的 now 在测速前
+        # 只是列表首节点，不可信，必须显式触发一次测速）。
+        picked = pick_fastest(api_port)
+        if picked:
+            name, ms = picked
             print(
-                f"已选定节点 {chosen} 延迟 {latency}ms"
-                f"（订阅源 {index + 1}/{total}，共 {len(names)} 节点，"
-                f"其中 {len([d for d in delays.values() if isinstance(d, int) and d > 0])} 个可用）",
+                f"已选定节点 {name} 延迟 {ms}ms"
+                f"（订阅源 {index + 1}/{total}，共 {len(names)} 节点）",
                 flush=True,
             )
             return 0
