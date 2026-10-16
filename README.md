@@ -8,7 +8,7 @@
 
 - 多站点并行调度，站点间环境与失败完全隔离
 - 浏览器适配器：整条链路（登录 + 签到）在真实 Chrome 内完成，可过 Cloudflare 的 JS 质询
-- 出口代理：CI 里起本地 mihomo，逐个探活订阅节点并选定一个，浏览器走该端口
+- 出口代理：CI 里起本地 mihomo，**并行测速**订阅节点并选定最快的可用节点，浏览器走该端口
 - 登录会话缓存：有效期内复用 cookie（含 `cf_clearance`），失效自动重登
 - 多通知渠道：SMTP / 钉钉 / 企业微信 / 飞书 / Server 酱 / Bark / Telegram / PushPlus / PushDeer / Webhook / ntfy / 控制台
 - 全部凭据与敏感配置只走环境变量 / GitHub Secrets，禁止写入配置文件，日志全程脱敏
@@ -59,7 +59,7 @@ uv run auto-check-in --config config/check-in.toml --dry-run
 多站点并行调度（CHECK_IN_SITES，默认并行度 min(站点数, 4)）
         │
         ▼ 每个站点：独立环境变量 + 独立 HTTP 会话（批次按站点隔离）
-起本地 mihomo（proxy_setup）：拉订阅 → 重写为本地配置 → 逐个探活选节点
+起本地 mihomo（proxy_setup）：拉订阅 → 重写为本地配置 → 并行测速选最快节点
    │ 全部不可用 → 代理启动失败（退出码 1）
    ▼
 Chrome 启动，--proxy-server 指向 127.0.0.1:7890
@@ -114,7 +114,9 @@ uv run python -m auto_check_in.proxy_setup
 - 下载 mihomo 内核（按平台选 `linux`/`darwin` × `amd64`/`arm64` 的 `compatible` 构建）
 - 拉订阅，**节点定义原样保留**（vless 的 `tls`/`flow`/`reality-opts` 手写解析极易遗漏），只把 `rules` 换成一条 `MATCH,GLOBAL`
   —— 订阅自带的数千条含 `GEOIP` 的规则会触发 MMDB 下载，受限网络下超时即 fatal 退出
-- 逐个切换节点探活，选定第一个可达的
+- **并行**测速全部节点（mihomo url-test 组 + `/group/GLOBAL/delay`），选定最快的一个
+- 健康检查以签到页返回 200 为准，返回 403 质询页的节点被自动排除
+- 被 Cloudflare 拦下（质询不过 / 页面挂死）时自动换节点重试，最多 4 次，已试过的节点不再选
 - 订阅是公开 raw 链接，无需凭据；`CHECK_IN_PROXY_SUBSCRIPTION` 只走环境变量 / 仓库变量
 
 #### 内置订阅源（按顺序回退）
