@@ -10,7 +10,7 @@ from requests.exceptions import ProxyError
 
 from auto_check_in.config import NetworkConfig
 from auto_check_in.http import FailoverSession, SessionProvider
-from auto_check_in.pool import MAX_BATCHES
+from auto_check_in.pool import MAX_BATCHES, MAX_BATCHES_PER_ACCOUNT
 
 
 def _pool_fetcher(*batches: tuple[str, ...]) -> mock.Mock:
@@ -188,7 +188,7 @@ class FailoverDirectFirstTests(unittest.TestCase):
             session.close()
 
     def test_empty_batch_retries_within_budget(self):
-        fetcher = _pool_fetcher((), (), ("http://1.2.3.4:8080",))
+        fetcher = _pool_fetcher((), ("http://1.2.3.4:8080",))
         session = self._session(fetcher)
         attempts: list[dict] = []
 
@@ -200,7 +200,7 @@ class FailoverDirectFirstTests(unittest.TestCase):
             response = session.request("GET", "https://site.example")
         try:
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(fetcher.call_count, 3)
+            self.assertEqual(fetcher.call_count, 2)
             self.assertEqual(
                 attempts[1],
                 {"http": "http://1.2.3.4:8080", "https": "http://1.2.3.4:8080"},
@@ -208,7 +208,8 @@ class FailoverDirectFirstTests(unittest.TestCase):
         finally:
             session.close()
 
-    def test_empty_batch_stops_at_budget(self):
+    def test_empty_batch_stops_at_account_budget(self):
+        """空批次同样计入账号预算，避免多账号时线性放大撞 CI 超时。"""
         fetcher = _pool_fetcher()
         session = self._session(fetcher)
 
@@ -219,7 +220,7 @@ class FailoverDirectFirstTests(unittest.TestCase):
             response = session.request("GET", "https://site.example")
         try:
             self.assertEqual(response.status_code, 403)
-            self.assertEqual(fetcher.call_count, MAX_BATCHES)
+            self.assertEqual(fetcher.call_count, MAX_BATCHES_PER_ACCOUNT)
         finally:
             session.close()
 
@@ -296,7 +297,8 @@ class FailoverBatchTests(unittest.TestCase):
         finally:
             session.close()
 
-    def test_max_batches_exhausted_returns_last_response(self):
+    def test_account_budget_caps_batches(self):
+        """账号预算按成功拿到的批次数计：每批 1 个代理，最多 MAX_BATCHES_PER_ACCOUNT 次请求。"""
         fetcher = _pool_fetcher(
             ("http://p1:80",),
             ("http://p2:80",),
@@ -315,8 +317,32 @@ class FailoverBatchTests(unittest.TestCase):
             response = session.request("GET", "https://site.example")
         try:
             self.assertEqual(response.status_code, 403)
-            self.assertEqual(fetcher.call_count, 5)
-            self.assertEqual(len(attempts), 5)
+            self.assertEqual(fetcher.call_count, MAX_BATCHES_PER_ACCOUNT)
+            self.assertEqual(len(attempts), MAX_BATCHES_PER_ACCOUNT)
+        finally:
+            session.close()
+
+    def test_batch_exhausted_acquires_next_batch_within_account_budget(self):
+        """一批内多代理全部失败后，仍可取下一批，直到账号预算用尽。"""
+        fetcher = _pool_fetcher(
+            ("http://p1:80", "http://p2:80", "http://p3:80"),
+            ("http://p4:80", "http://p5:80", "http://p6:80"),
+            ("http://p7:80",),
+        )
+        session = self._session(fetcher)
+        attempts: list[dict] = []
+
+        def fake_request(self_, method, url, **kwargs):
+            attempts.append(dict(self_.proxies))
+            return mock.Mock(status_code=403)
+
+        with mock.patch.object(requests.Session, "request", fake_request):
+            response = session.request("GET", "https://site.example")
+        try:
+            self.assertEqual(response.status_code, 403)
+            self.assertEqual(fetcher.call_count, MAX_BATCHES_PER_ACCOUNT)
+            # 账号预算内会探完每批的全部代理，而不是每批只试一个
+            self.assertEqual(len(attempts), 6)
         finally:
             session.close()
 

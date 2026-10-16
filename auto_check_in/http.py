@@ -9,7 +9,7 @@ import requests
 
 from .config import NetworkConfig
 from .log import logger
-from .pool import MAX_BATCHES, fetch_pool_batch
+from .pool import MAX_BATCHES, MAX_BATCHES_PER_ACCOUNT, fetch_pool_batch
 from .security import redact_text
 
 USER_AGENTS = (
@@ -69,19 +69,29 @@ class FailoverSession(requests.Session):
         self._direct_first = direct_first
         self._pool_fetcher = pool_fetcher
         self._batch_count = 0
+        self._account_batches = 0
         self._proxy_urls = proxy_urls
         self._proxy_index = proxy_urls.index(initial_proxy) if initial_proxy in proxy_urls else 0
         if initial_proxy:
             self.proxies = {"http": initial_proxy, "https": initial_proxy}
 
     def _acquire_batch(self) -> bool:
-        """Fetch a usable batch, retrying empty pool responses within ``MAX_BATCHES``.
+        """Fetch a usable batch, retrying empty pool responses within the budget.
 
         Free pools rotate every few minutes, so one empty response is not final:
-        spend the remaining batch budget before giving up.
+        retry until a batch is usable or this account's budget
+        (``MAX_BATCHES_PER_ACCOUNT``) is spent. Every fetch — empty or not —
+        counts against it, because an empty pool costs the same wall-clock as a
+        dead batch, and a multi-account run would otherwise spend ~5 min per
+        account waiting on a pool that never answers.
         """
-        while self._pool_fetcher is not None and self._batch_count < MAX_BATCHES:
+        while (
+            self._pool_fetcher is not None
+            and self._account_batches < MAX_BATCHES_PER_ACCOUNT
+            and self._batch_count < MAX_BATCHES
+        ):
             self._batch_count += 1
+            self._account_batches += 1
             batch = self._pool_fetcher()
             if batch:
                 self._proxy_urls = tuple(batch)

@@ -19,7 +19,11 @@ from .log import logger
 from .security import redact_text
 
 BATCH_SIZE = 5
+# 每账号最多拉取的批次数：批预算（MAX_BATCHES）是循环内的重试上限，
+# 账号预算（MAX_BATCHES_PER_ACCOUNT）限制单个账号消耗的时间，
+# 多账号时避免线性放大撞上 CI 的 timeout-minutes。
 MAX_BATCHES = 5
+MAX_BATCHES_PER_ACCOUNT = 2
 PROBE_CONNECT_TIMEOUT = 2.0
 PROBE_TOTAL_TIMEOUT = 4.0
 PROBE_CONCURRENCY = 10
