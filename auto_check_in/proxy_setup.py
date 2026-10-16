@@ -153,11 +153,16 @@ def _probe_node(api_port: int, name: str, proxy_port: int, timeout: float = 20.0
     except Exception:
         return None
     time.sleep(0.5)
-    # 用目标站点做探针：质询页也会返回 403，但 TCP 能通即说明节点可用
+    # 探实际会被 WAF 拦截的接口，而非只能开的签到页面：
     started = time.time()
     try:
+        # 探实际会被 WAF 拦截的接口，而非只能开的签到页面：
+        # 页面能开不代表 plugin.php 能通，浏览器卡在那里就会 renderer 超时。
+        # 不带 formhash 也没关系——只要收到 HTTP 响应（含 403 质询），
+        # 就说明链路通，浏览器能自己去过质询。
         request = urllib.request.Request(
-            "https://xsijishe.net/k_misign-sign.html",
+            "https://xsijishe.net/plugin.php?id=k_misign:sign&operation=qiandao"
+            "&format=empty&inajax=1&ajaxtarget=JD_sign",
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
         )
         opener = urllib.request.build_opener(
