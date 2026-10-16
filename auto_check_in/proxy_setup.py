@@ -50,6 +50,22 @@ def _platform_tag() -> str:
     return f"{os_tag}-{arch}"
 PROXY_PORT = 7890
 API_PORT = 9090
+# 探到多快就收手。免费节点延迟普遍在秒级，2.5s 内可达的节点足够浏览器用。
+GOOD_LATENCY_SECONDS = 2.5
+
+
+def api_select(api_port: int, name: str) -> None:
+    """Point the GLOBAL group at one node via the external controller."""
+    import json
+
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{api_port}/proxies/GLOBAL",
+        method="PUT",
+        data=json.dumps({"name": name}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - localhost
+        response.read()
 
 
 class ProxySetupError(RuntimeError):
@@ -112,8 +128,13 @@ def _write_config(subscription: Path, out: Path, proxy_port: int, api_port: int)
     return names
 
 
-def _probe_node(api_port: int, name: str, proxy_port: int, timeout: float = 20.0) -> bool:
-    """Switch to a node and check the target is reachable through it."""
+def _probe_node(api_port: int, name: str, proxy_port: int, timeout: float = 20.0) -> float | None:
+    """Switch to a node, measure how fast the target answers through it.
+
+    Returns the elapsed seconds, or ``None`` when the node is unreachable. The
+    latency matters as much as reachability: a node that barely answers inside
+    ``timeout`` still hangs the browser, so the caller picks the fastest node.
+    """
     import json
     import urllib.error
 
@@ -130,9 +151,10 @@ def _probe_node(api_port: int, name: str, proxy_port: int, timeout: float = 20.0
     try:
         api("PUT", "/proxies/GLOBAL", {"name": name})
     except Exception:
-        return False
+        return None
     time.sleep(0.5)
     # 用目标站点做探针：质询页也会返回 403，但 TCP 能通即说明节点可用
+    started = time.time()
     try:
         request = urllib.request.Request(
             "https://xsijishe.net/k_misign-sign.html",
@@ -144,12 +166,12 @@ def _probe_node(api_port: int, name: str, proxy_port: int, timeout: float = 20.0
             )
         )
         opener.open(request, timeout=timeout)
-        return True
+        return time.time() - started
     except urllib.error.HTTPError:
         # 有 HTTP 响应（含 403 质询）说明链路通，浏览器可以自己去过质询
-        return True
+        return time.time() - started
     except Exception:
-        return False
+        return None
 
 
 def _subscriptions(override: str) -> tuple[str, ...]:
@@ -189,14 +211,28 @@ def _setup_one(
     if process.poll() is not None:
         raise ProxySetupError(f"mihomo 启动失败，见 {work / 'mihomo.log'}")
     try:
+        best: tuple[str, float] | None = None
         for name in names:
-            if _probe_node(api_port, name, proxy_port):
+            latency = _probe_node(api_port, name, proxy_port)
+            if latency is None:
+                continue
+            # 免费源里首节点往往已经半死：TCP 能连但每次请求挂几十秒，
+            # 浏览器随即 renderer 超时。所以取最快节点，不是第一个可达的。
+            if best is None or latency < best[1]:
+                best = (name, latency)
                 print(
-                    f"已选定节点 #{names.index(name) + 1}/{len(names)}"
-                    f"（订阅源 {index + 1}/{total}）",
-                    flush=True,
+                    f"节点可用 {name} 延迟 {latency:.1f}s（共 {len(names)}）", flush=True
                 )
-                return 0
+            if latency <= GOOD_LATENCY_SECONDS:
+                break  # 够快了，不必试完
+        if best is not None:
+            api_select(api_port, best[0])
+            print(
+                f"已选定节点 {best[0]} 延迟 {best[1]:.1f}s"
+                f"（订阅源 {index + 1}/{total}，共 {len(names)} 节点）",
+                flush=True,
+            )
+            return 0
         raise ProxySetupError("所有节点均不可用")
     except BaseException:
         process.terminate()
