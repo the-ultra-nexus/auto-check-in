@@ -117,6 +117,21 @@ uv run python -m auto_check_in.proxy_setup
 - 逐个切换节点探活，选定第一个可达的
 - 订阅是公开 raw 链接，无需凭据；`CHECK_IN_PROXY_SUBSCRIPTION` 只走环境变量 / 仓库变量
 
+#### 内置订阅源（按顺序回退）
+
+免费节点寿命以小时计，单个源随时可能整体失效，所以内置三个源依次尝试，某个源拉不到或
+所有节点不可达就换下一个；全部失败才终止。每个源用独立的工作目录，节点定义不会互相污染。
+
+| 源 | 仓库 | 更新频率 |
+| --- | --- | --- |
+| 1 | [`zhuhaiuk/free-nodes`](https://github.com/zhuhaiuk/free-nodes) | 每小时 |
+| 2 | [`shaoyouvip/free`](https://github.com/shaoyouvip/free) | 每日 |
+| 3 | [`snakem982/proxypool`](https://github.com/snakem982/proxypool) | 持续 |
+
+三者均已在 2026-10-16 用真实浏览器实测通过目标站点（拿到 `formhash`、未被质询）。
+设置了 `CHECK_IN_PROXY_SUBSCRIPTION` 则只用该源，不走回退。日志里 `已选定节点 #N/M（订阅源 i/j）`
+标明命中的是第几个源——若长期固定命中第三个，说明前两个已失效，该换源了。
+
 ### 判定页面状态
 
 判 Cloudflare 质询**只看 `driver.title`**。CF 在**成功页面**里也会注入 `challenge-platform`

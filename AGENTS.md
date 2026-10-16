@@ -22,7 +22,7 @@ cli.main → runner.run → _run_site → adapter.run(account)
 | `auto_check_in/runner.py` | 多站点并行调度，逐账号调 adapter |
 | `auto_check_in/config.py` | TOML + 环境变量加载，站点隔离，凭据禁写配置文件 |
 | `auto_check_in/browser.py` | Chrome 工厂，可选 `--proxy-server` |
-| `auto_check_in/proxy_setup.py` | 起本地 mihomo，拉订阅、探活、选节点 |
+| `auto_check_in/proxy_setup.py` | 起本地 mihomo，按顺序回退拉订阅、探活、选节点 |
 | `auto_check_in/adapters/sijishe_browser.py` | 司机社浏览器适配器 |
 | `auto_check_in/discuz.py` | Discuz 通用解析（formhash、登录弹框、响应分类） |
 | `auto_check_in/session.py` | cookie 缓存读写 |
@@ -41,8 +41,10 @@ cli.main → runner.run → _run_site → adapter.run(account)
 4. **订阅自带规则会触发 MMDB 下载。** 数千条含 `GEOIP` 的规则在受限网络下超时即
    fatal 退出（API 端口起不来）。必须换成一条 `MATCH,GLOBAL`。
 5. **代理地址只走环境变量。** 写入 TOML 会 `ConfigError`（与凭据同等对待）。
-6. **凭据不进日志。** 一律经 `security.py` 的 `mask_username` / `redact_text`。
-7. **缓存的 `*_auth` 不等于活会话。** 恢复 cookie 后 `_is_logged_in` 会为真并跳过登录，
+6. **订阅源要按顺序回退。** 免费节点寿命以小时计，单个源失效不能让签到整体停摆。
+   改源时必须每个源独立工作目录，否则上一个源的节点定义会污染下一个。
+7. **凭据不进日志。** 一律经 `security.py` 的 `mask_username` / `redact_text`。
+8. **缓存的 `*_auth` 不等于活会话。** 恢复 cookie 后 `_is_logged_in` 会为真并跳过登录，
    但服务端会话可能早已失效，此时 `plugin.php` 返回「您所在用户组不允许使用」。这类
    响应必须归类为 `LOGIN_FAILED`（`DISCUZ_NOT_LOGGED_IN_MARKERS`）才能触发重登；且
    重登前必须 `delete_all_cookies()`，否则同一个陈旧 cookie 会把重登再次骗过。

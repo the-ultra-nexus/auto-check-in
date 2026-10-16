@@ -6,6 +6,9 @@
 
 订阅源是公开的 raw 链接，无需凭据；节点定义原样使用，只有 rules 被替换
 （订阅自带 9000+ 条含 GEOIP 的规则会触发 MMDB 下载，受限网络下超时即 fatal）。
+
+内置多个源并按顺序回退：免费节点寿命以小时计，单个源随时可能整体失效，
+一次 CI 跑失败不该让签到整体停摆。
 """
 
 from __future__ import annotations
@@ -20,8 +23,13 @@ import time
 import urllib.request
 from pathlib import Path
 
-DEFAULT_SUBSCRIPTION = (
-    "https://raw.githubusercontent.com/snakem982/proxypool/main/source/clash-meta-2.yaml"
+# 内置公开源，按顺序回退：免费节点寿命短，单个源随时可能整体失效。
+# 三者均已用真实浏览器实测过目标站点（拿到 formhash、未被质询），
+# 且都是今天仍在自动更新的仓库。
+DEFAULT_SUBSCRIPTIONS = (
+    "https://raw.githubusercontent.com/zhuhaiuk/free-nodes/main/clash_config.yaml",
+    "https://raw.githubusercontent.com/shaoyouvip/free/main/mihomo.yaml",
+    "https://raw.githubusercontent.com/snakem982/proxypool/main/source/clash-meta-2.yaml",
 )
 CORE_RELEASE = (
     "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/"
@@ -144,32 +152,64 @@ def _probe_node(api_port: int, name: str, proxy_port: int, timeout: float = 20.0
         return False
 
 
+def _subscriptions(override: str) -> tuple[str, ...]:
+    """用户指定了订阅就只用它；否则走内置源的顺序回退。"""
+    return (override,) if override.strip() else DEFAULT_SUBSCRIPTIONS
+
+
 def setup(subscription_url: str, work_dir: Path, proxy_port: int, api_port: int) -> int:
     work_dir.mkdir(parents=True, exist_ok=True)
     core = _core_binary(work_dir)
-    subscription = work_dir / "subscription.yaml"
-    _fetch_subscription(subscription_url, subscription)
-    config = work_dir / "config.yaml"
+    urls = _subscriptions(subscription_url)
+    errors: list[str] = []
+    for index, url in enumerate(urls):
+        work = work_dir if len(urls) == 1 else work_dir / f"sub{index}"
+        work.mkdir(parents=True, exist_ok=True)
+        try:
+            return _setup_one(core, url, work, proxy_port, api_port, index, len(urls))
+        except ProxySetupError as exc:
+            # 单个源失效不能终止整个流程：免费源随时可能整体不可用，换下一个即可。
+            errors.append(f"[{index + 1}/{len(urls)}] {url}\n  {exc}")
+    raise ProxySetupError("所有订阅源均不可用：\n" + "\n".join(errors))
+
+
+def _setup_one(
+    core: Path, url: str, work: Path, proxy_port: int, api_port: int, index: int, total: int
+) -> int:
+    subscription = work / "subscription.yaml"
+    _fetch_subscription(url, subscription)
+    config = work / "config.yaml"
     names = _write_config(subscription, config, proxy_port, api_port)
 
-    log = (work_dir / "mihomo.log").open("wb")
+    log = (work / "mihomo.log").open("wb")
     process = subprocess.Popen(
-        [str(core), "-d", str(work_dir), "-f", str(config)], stdout=log, stderr=log
+        [str(core), "-d", str(work), "-f", str(config)], stdout=log, stderr=log
     )
     time.sleep(4)
     if process.poll() is not None:
-        raise ProxySetupError(f"mihomo 启动失败，见 {work_dir / 'mihomo.log'}")
-
-    for name in names:
-        if _probe_node(api_port, name, proxy_port):
-            print(f"已选定节点 #{names.index(name) + 1}/{len(names)}", flush=True)
-            return 0
-    raise ProxySetupError("所有节点均不可用")
+        raise ProxySetupError(f"mihomo 启动失败，见 {work / 'mihomo.log'}")
+    try:
+        for name in names:
+            if _probe_node(api_port, name, proxy_port):
+                print(
+                    f"已选定节点 #{names.index(name) + 1}/{len(names)}"
+                    f"（订阅源 {index + 1}/{total}）",
+                    flush=True,
+                )
+                return 0
+        raise ProxySetupError("所有节点均不可用")
+    except BaseException:
+        process.terminate()
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="启动本地代理供浏览器使用")
-    parser.add_argument("--subscription", default=DEFAULT_SUBSCRIPTION)
+    parser.add_argument(
+        "--subscription",
+        default="",
+        help="指定单个订阅源；留空则按顺序尝试内置公开源",
+    )
     parser.add_argument("--work-dir", default="/tmp/auto-check-in-proxy")
     parser.add_argument("--proxy-port", type=int, default=PROXY_PORT)
     parser.add_argument("--api-port", type=int, default=API_PORT)
