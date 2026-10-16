@@ -75,18 +75,21 @@ class FailoverSession(requests.Session):
             self.proxies = {"http": initial_proxy, "https": initial_proxy}
 
     def _acquire_batch(self) -> bool:
-        """Fetch the next batch of proxies; returns False when unavailable."""
-        if self._pool_fetcher is None or self._batch_count >= MAX_BATCHES:
-            return False
-        self._batch_count += 1
-        batch = self._pool_fetcher()
-        if not batch:
+        """Fetch a usable batch, retrying empty pool responses within ``MAX_BATCHES``.
+
+        Free pools rotate every few minutes, so one empty response is not final:
+        spend the remaining batch budget before giving up.
+        """
+        while self._pool_fetcher is not None and self._batch_count < MAX_BATCHES:
+            self._batch_count += 1
+            batch = self._pool_fetcher()
+            if batch:
+                self._proxy_urls = tuple(batch)
+                self._proxy_index = 0
+                logger.info("代理批次获取成功 proxies=%d", len(batch))
+                return True
             logger.warning("代理池未返回可用代理（第 %d 次尝试）", self._batch_count)
-            return False
-        self._proxy_urls = tuple(batch)
-        self._proxy_index = 0
-        logger.info("代理批次获取成功 proxies=%d", len(batch))
-        return True
+        return False
 
     def _direct_request(self, method: str, url: str, args: tuple, kwargs: dict) -> Any:
         """Attempt the request directly; returns (response, failed_reason)."""

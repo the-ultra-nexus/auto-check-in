@@ -10,6 +10,7 @@ from requests.exceptions import ProxyError
 
 from auto_check_in.config import NetworkConfig
 from auto_check_in.http import FailoverSession, SessionProvider
+from auto_check_in.pool import MAX_BATCHES
 
 
 def _pool_fetcher(*batches: tuple[str, ...]) -> mock.Mock:
@@ -183,6 +184,42 @@ class FailoverDirectFirstTests(unittest.TestCase):
             response = session.request("GET", "https://site.example")
         try:
             self.assertEqual(response.status_code, 403)
+        finally:
+            session.close()
+
+    def test_empty_batch_retries_within_budget(self):
+        fetcher = _pool_fetcher((), (), ("http://1.2.3.4:8080",))
+        session = self._session(fetcher)
+        attempts: list[dict] = []
+
+        def fake_request(self_, method, url, **kwargs):
+            attempts.append(dict(self_.proxies))
+            return mock.Mock(status_code=403 if len(attempts) == 1 else 200)
+
+        with mock.patch.object(requests.Session, "request", fake_request):
+            response = session.request("GET", "https://site.example")
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(fetcher.call_count, 3)
+            self.assertEqual(
+                attempts[1],
+                {"http": "http://1.2.3.4:8080", "https": "http://1.2.3.4:8080"},
+            )
+        finally:
+            session.close()
+
+    def test_empty_batch_stops_at_budget(self):
+        fetcher = _pool_fetcher()
+        session = self._session(fetcher)
+
+        def fake_request(self_, method, url, **kwargs):
+            return mock.Mock(status_code=403)
+
+        with mock.patch.object(requests.Session, "request", fake_request):
+            response = session.request("GET", "https://site.example")
+        try:
+            self.assertEqual(response.status_code, 403)
+            self.assertEqual(fetcher.call_count, MAX_BATCHES)
         finally:
             session.close()
 
