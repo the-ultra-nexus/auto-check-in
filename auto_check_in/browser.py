@@ -27,6 +27,11 @@ _CHROME_FLAGS = (
 )
 
 
+# 页面加载上限。被 Cloudflare 拦住的出口会一直转圈，等太久不如让适配器
+# 换节点：可用节点实测 4–6s 就能加载完，30s 已经足够宽松。
+PAGE_LOAD_TIMEOUT_SECONDS = 30
+
+
 class BrowserError(RuntimeError):
     """Raised when no usable browser can be started."""
 
@@ -77,6 +82,6 @@ def build_driver(proxy_url: str | None = None, headless: bool = True):
         )
     except Exception:
         pass
-    driver.set_page_load_timeout(60)
+    driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
     driver.set_script_timeout(60)
     return driver

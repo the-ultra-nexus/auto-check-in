@@ -34,6 +34,9 @@ from ..security import mask_username, redact_text
 from ..session import SessionCacheStats, load_cookies, save_cookies
 
 CHALLENGE_MARKERS = ("Just a moment", "cf-challenge", "Checking your browser")
+# 质询等待上限。免费节点波动大，等太久不如换节点：实测可用节点 4–6s 就能
+# 加载完，卡过 15s 基本就是被这个出口拦住了，换一个比继续等划算。
+CHALLENGE_TIMEOUT_SECONDS = 15
 LOGIN_TIMEOUT_SECONDS = 90
 # 免费源里可用节点很多，被 CF 拦下就换一个，比原地重试划算。
 MAX_NODE_SWITCHES = 4
@@ -46,9 +49,8 @@ class CloudflareBlocked(RuntimeError):
 def _get_with_retry(driver: Any, url: str, retries: int = 1) -> None:
     """打开页面，超时后刷新重试一次。
 
-    免费节点波动大，sign/登录页在 CF 质询下 headless Chrome 易挂死
-    (page_load_timeout 60s → renderer timeout)。刷新后 CF 质询有时能自动过，
-    避免一次节点抖动就拖垮整次运行。
+    免费节点波动大，sign/登录页在 CF 质询下 headless Chrome 易挂死。
+    只重试一次：再挂就抛给 run() 换节点，比在这个出口上反复等划算。
     """
     from selenium.common.exceptions import TimeoutException
 
@@ -73,7 +75,7 @@ class SijisheBrowserAdapter:
         self,
         config: SiteConfig,
         driver_factory: Callable[[], Any] | None = None,
-        challenge_timeout_seconds: int = LOGIN_TIMEOUT_SECONDS,
+        challenge_timeout_seconds: int = CHALLENGE_TIMEOUT_SECONDS,
         node_switcher: Callable[[set[str]], str | None] | None = None,
         api_port: int = PROXY_API_PORT,
     ):
