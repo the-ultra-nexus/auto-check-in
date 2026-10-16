@@ -12,6 +12,9 @@ from .models import CheckInStatus
 from .security import redact_text
 
 DISCUZ_ALREADY_MARKERS = ("今日已签", "您今天已经签到过了", "今日已签到")
+# 未登录时签到接口的响应：cookie 看起来还在（*_auth 存在）但服务端会话已失效，
+# 归类为 login-failed 才能触发调用方的重登路径，而不是当成签到失败直接结束。
+DISCUZ_NOT_LOGGED_IN_MARKERS = ("您所在用户组不允许使用", "您需要登录后才能", "请先登录")
 
 
 def md5_password(value: str) -> str:
@@ -75,6 +78,8 @@ def classify_discuz_response(text: str) -> tuple[CheckInStatus, str]:
     cdata = (root.text or "").strip()
     if any(marker in cdata for marker in DISCUZ_ALREADY_MARKERS):
         return CheckInStatus.ALREADY_CHECKED_IN, ""
+    if any(marker in cdata for marker in DISCUZ_NOT_LOGGED_IN_MARKERS):
+        return CheckInStatus.LOGIN_FAILED, redact_text(cdata[:80])
     if not cdata:
         return CheckInStatus.SUCCESS, ""
     return CheckInStatus.CHECK_IN_FAILED, redact_text(cdata[:80])

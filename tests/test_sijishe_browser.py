@@ -11,85 +11,7 @@ from auto_check_in.adapters.sijishe_browser import SijisheBrowserAdapter, _domai
 from auto_check_in.config import NetworkConfig
 from auto_check_in.models import Account, CheckInStatus
 
-from helpers import LOGGED_SIGN_PAGE, make_site_config
-
-
-class FakeElement:
-    def __init__(self, driver, kind: str):
-        self._driver = driver
-        self._kind = kind
-
-    def send_keys(self, text: str) -> None:
-        self._driver.typed.append((self._kind, text))
-
-    def clear(self) -> None:
-        pass
-
-    def click(self) -> None:
-        self._driver.clicks.append(self._kind)
-        if self._kind == "submit":
-            self._driver.login_lands = True
-
-
-class FakeForm:
-    def __init__(self, driver):
-        self._driver = driver
-
-    def find_element(self, by, selector):
-        if "username" in selector:
-            return FakeElement(self._driver, "username")
-        if "password" in selector:
-            return FakeElement(self._driver, "password")
-        if self._driver.has_submit:
-            return FakeElement(self._driver, "submit")
-        raise RuntimeError("no such element")
-
-
-class FakeDriver:
-    """Scripted browser: enough surface for the adapter's flow."""
-
-    def __init__(self):
-        self.typed: list[tuple[str, str]] = []
-        self.clicks: list[str] = []
-        self.visited: list[str] = []
-        self.cookies: list[dict] = []
-        self.login_lands = False
-        self.has_submit = True
-        self.title = "登录 - 站点"
-        self.sign_page = LOGGED_SIGN_PAGE
-        self.plugin_body = "<root><![CDATA[]]></root>"
-        self.scripts: list[str] = []
-
-    @property
-    def page_source(self) -> str:
-        if "k_misign-sign.html" in (self.visited[-1] if self.visited else ""):
-            return self.sign_page
-        return "<html><form><input name='username'><input name='password'></form></html>"
-
-    def get(self, url: str) -> None:
-        self.visited.append(url)
-        if "k_misign-sign.html" in url:
-            self.title = "每日签到 - 站点"
-
-    def find_element(self, by, selector):
-        if selector == '//form[.//input[@name="username"]]':
-            return FakeForm(self)
-        raise RuntimeError("not found")
-
-    def execute_async_script(self, script: str, *args):
-        self.scripts.append(script)
-        return self.plugin_body
-
-    def get_cookies(self):
-        if self.login_lands and not any(c["name"].endswith("_auth") for c in self.cookies):
-            self.cookies.append({"name": "SgL6_2132_auth", "value": "abc"})
-        return list(self.cookies)
-
-    def add_cookie(self, cookie: dict) -> None:
-        self.cookies.append(cookie)
-
-    def quit(self) -> None:
-        pass
+from helpers import FakeDriver, make_site_config
 
 
 class BrowserAdapterTests(unittest.TestCase):
@@ -149,6 +71,30 @@ class BrowserAdapterTests(unittest.TestCase):
             ).run(Account("alice", "pw"))
             # 恢复的会话不应再走登录表单
             self.assertEqual(second.typed, [])
+
+    def test_stale_cached_session_triggers_relogin(self):
+        """缓存里的 *_auth 仍在，但服务端会话已失效 → 应清 cookie 重登。"""
+        with tempfile.TemporaryDirectory() as directory:
+            from auto_check_in.session import save_cookies
+
+            save_cookies(Path(directory), "sijishe", "alice", {"SgL6_2132_auth": "stale"})
+            config = make_site_config(session_cache=True, session_dir=Path(directory))
+            driver = FakeDriver()
+            # 恢复的会话看起来有效，但签到接口返回未登录响应
+            driver.cookies.append({"name": "SgL6_2132_auth", "value": "stale"})
+            driver.plugin_body = (
+                "<root><![CDATA[您所在用户组不允许使用]]></root>"
+            )
+            driver.fix_after_login = True
+
+            adapter = SijisheBrowserAdapter(
+                config, driver_factory=lambda: driver, challenge_timeout_seconds=1
+            )
+            result = adapter.run(Account("alice", "pw"))
+            self.assertEqual(result.status, CheckInStatus.SUCCESS)
+            self.assertTrue(driver.clicks, "应重新提交登录表单")
+            stats = adapter.session_cache_stats
+            self.assertEqual(stats.rejected, 1)
 
     def test_unexpected_error_is_surfaced(self):
         driver = FakeDriver()

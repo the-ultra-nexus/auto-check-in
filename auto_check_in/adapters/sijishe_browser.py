@@ -154,6 +154,14 @@ class SijisheBrowserAdapter:
             )
         return bool(added)
 
+    @staticmethod
+    def _clear_cookies(driver: Any) -> None:
+        """Drop every cookie so a stale *_auth cannot fake a live session."""
+        try:
+            driver.delete_all_cookies()
+        except Exception:
+            pass
+
     def _persist_session(self, driver: Any, username: str) -> None:
         if not self.config.session_cache:
             logger.info(
@@ -200,6 +208,9 @@ class SijisheBrowserAdapter:
                         self.config.name,
                         mask_username(account.username),
                     )
+                    # 缓存里的 *_auth 让 _is_logged_in 误判为已登录，但服务端会话已失效；
+                    # 不清掉它，重登会被同一个陈旧 cookie 再次骗过。
+                    self._clear_cookies(driver)
                     self._login(driver, base, sign_page, account)
                     result = self._sign_in(driver, base, sign_page, account.username)
                 self._persist_session(driver, account.username)
@@ -303,21 +314,6 @@ class SijisheBrowserAdapter:
                 return AccountResult(username, status, message)
             last_message = message or "签到接口未确认成功"
         return AccountResult(username, CheckInStatus.CHECK_IN_FAILED, last_message)
-
-    def _sign_in_by_click(self, driver: Any, base: str, sign_page: str, username: str) -> AccountResult:
-        """备用路径：直接点击页面的签到按钮（站点自身 JS 会发起请求）。"""
-        from selenium.webdriver.common.by import By
-
-        driver.get(sign_page)
-        if not self._wait_clear(driver):
-            raise CheckInError("签到页被 Cloudflare 质询拦截")
-        try:
-            driver.find_element(By.ID, "JD_sign").click()
-        except Exception as exc:
-            raise CheckInError(f"签到按钮点击失败：{type(exc).__name__}") from exc
-        time.sleep(3)
-        return AccountResult(username, CheckInStatus.CHECK_IN_FAILED, "签到按钮已点击，结果未确认")
-
 
 def _domain(url: str) -> str:
     """Bare host for add_cookie (no scheme, no leading dot)."""

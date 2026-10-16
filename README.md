@@ -206,6 +206,8 @@ uv run auto-check-in --config config/check-in.toml --dry-run
 
 GitHub Actions 通过 `actions/cache` 在两次运行间恢复/保存 `.runtime/sessions`（工作流已内置）。注意 runner 出口 IP 可能变化导致 cookie 失效，此时会自动重新登录，功能不受影响。
 
+**缓存的 cookie 存在不代表会话仍然有效。** 恢复后 `*_auth` 会让登录态判定为真、跳过登录，但服务端会话可能已经失效，签到接口会返回「您所在用户组不允许使用」。该响应被归类为 `login-failed` 并触发 `rejected` 计数：清空 cookie 后重新登录一次，再走签到。`会话缓存: 恢复 N / 被拒重登 N / 新保存 N` 里的 `被拒重登` 就是这条路径的次数，正常应为 0 或 1。
+
 会话缓存可观测：每次运行按账号记录 `session-cache` 日志（`event=restored` / `restore-miss` / `rejected` / `saved` / `persist-skipped`，账号脱敏、不含 cookie 值），汇总输出末尾追加固定格式行 `会话缓存: 恢复 N / 被拒重登 N / 新保存 N`，通知一并携带，可直接判断缓存是否真正被复用。
 
 CI 缓存卫生（工作流内置步骤）：
