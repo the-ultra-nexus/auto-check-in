@@ -7,7 +7,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from auto_check_in.adapters.sijishe_browser import SijisheBrowserAdapter, _domain
+from auto_check_in.adapters.sijishe_browser import (
+    MAX_NODE_SWITCHES,
+    SijisheBrowserAdapter,
+    _domain,
+)
 from auto_check_in.config import NetworkConfig
 from auto_check_in.models import Account, CheckInStatus
 
@@ -15,11 +19,15 @@ from helpers import FakeDriver, make_site_config
 
 
 class BrowserAdapterTests(unittest.TestCase):
-    def _adapter(self, driver: FakeDriver, **overrides) -> SijisheBrowserAdapter:
+    def _adapter(
+        self, driver: FakeDriver, switcher=None, **overrides
+    ) -> SijisheBrowserAdapter:
+        """switcher 默认返回 None（没有别的节点可换），可传入序列模拟换节点。"""
         return SijisheBrowserAdapter(
             make_site_config(**overrides),
             driver_factory=lambda: driver,
             challenge_timeout_seconds=1,
+            node_switcher=switcher or (lambda exclude: None),
         )
 
     def test_full_login_and_sign_in(self):
@@ -35,12 +43,85 @@ class BrowserAdapterTests(unittest.TestCase):
         result = self._adapter(driver, session_cache=False).run(Account("alice", "pw"))
         self.assertEqual(result.status, CheckInStatus.ALREADY_CHECKED_IN)
 
-    def test_challenge_page_raises_check_in_error(self):
+    def test_challenge_page_switches_node_then_errors(self):
+        """被 CF 拦下且没有别的节点可换 → ERROR（而非静默失败）。"""
         driver = FakeDriver()
         driver.title = "Just a moment..."
         adapter = self._adapter(driver, session_cache=False, network=NetworkConfig(retries=1))
         result = adapter.run(Account("alice", "pw"))
-        self.assertEqual(result.status, CheckInStatus.LOGIN_FAILED)
+        self.assertEqual(result.status, CheckInStatus.ERROR)
+        self.assertIn("Cloudflare", result.message)
+
+    def test_blocked_node_is_switched_and_then_succeeds(self):
+        """第一次被拦 → 换节点 → 第二次成功。"""
+        blocked = FakeDriver()
+        blocked.title = "Just a moment..."
+        good = FakeDriver()
+        drivers = iter([blocked, good])
+        switches: list[set] = []
+
+        def switcher(exclude: set) -> str:
+            switches.append(set(exclude))
+            return "node-2"
+
+        adapter = SijisheBrowserAdapter(
+            make_site_config(session_cache=False),
+            driver_factory=lambda: next(drivers),
+            challenge_timeout_seconds=1,
+            node_switcher=switcher,
+        )
+        result = adapter.run(Account("alice", "pw"))
+
+        self.assertEqual(result.status, CheckInStatus.SUCCESS)
+        self.assertEqual(len(switches), 1, "被拦一次应换一次节点")
+        self.assertIn("node-2", adapter._current_node)
+
+    def test_gives_up_after_max_switches(self):
+        """一直换节点也过不去 → 停止，不无限重试。"""
+        calls: list[int] = []
+
+        def switcher(exclude: set) -> str:
+            calls.append(1)
+            return f"node-{len(calls)}"
+
+        def factory():
+            d = FakeDriver()
+            d.title = "Just a moment..."
+            return d
+
+        adapter = SijisheBrowserAdapter(
+            make_site_config(session_cache=False, network=NetworkConfig(retries=1)),
+            driver_factory=factory,
+            challenge_timeout_seconds=1,
+            node_switcher=switcher,
+        )
+        result = adapter.run(Account("alice", "pw"))
+
+        self.assertEqual(result.status, CheckInStatus.ERROR)
+        self.assertEqual(len(calls), MAX_NODE_SWITCHES, "换节点次数应封顶")
+
+    def test_switcher_receives_tried_nodes(self):
+        """换节点时必须把已试过的节点传出去，否则会换回同一个。"""
+        seen: list[set] = []
+
+        def switcher(exclude: set) -> str | None:
+            seen.append(set(exclude))
+            return "next" if len(seen) < 2 else None
+
+        def factory():
+            d = FakeDriver()
+            d.title = "Just a moment..."
+            return d
+
+        adapter = SijisheBrowserAdapter(
+            make_site_config(session_cache=False, network=NetworkConfig(retries=1)),
+            driver_factory=factory,
+            challenge_timeout_seconds=1,
+            node_switcher=switcher,
+        )
+        adapter.run(Account("alice", "pw"))
+        # 第二次调用时，第一次选中的节点应已在排除集里
+        self.assertIn("next", seen[1])
 
     def test_plugin_response_parsed_for_already_checked_in(self):
         driver = FakeDriver()

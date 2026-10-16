@@ -29,11 +29,41 @@ from ..discuz import (
 from ..errors import CheckInError, LoginBlockedError, LoginError
 from ..log import logger
 from ..models import Account, AccountResult, CheckInStatus
+from ..proxy_setup import API_PORT as PROXY_API_PORT, switch_to_next
 from ..security import mask_username, redact_text
 from ..session import SessionCacheStats, load_cookies, save_cookies
 
 CHALLENGE_MARKERS = ("Just a moment", "cf-challenge", "Checking your browser")
 LOGIN_TIMEOUT_SECONDS = 90
+# 免费源里可用节点很多，被 CF 拦下就换一个，比原地重试划算。
+MAX_NODE_SWITCHES = 4
+
+
+class CloudflareBlocked(RuntimeError):
+    """当前节点被 Cloudflare 拦下（质询页或 renderer 挂死）→ 换节点重试。"""
+
+
+def _get_with_retry(driver: Any, url: str, retries: int = 1) -> None:
+    """打开页面，超时后刷新重试一次。
+
+    免费节点波动大，sign/登录页在 CF 质询下 headless Chrome 易挂死
+    (page_load_timeout 60s → renderer timeout)。刷新后 CF 质询有时能自动过，
+    避免一次节点抖动就拖垮整次运行。
+    """
+    from selenium.common.exceptions import TimeoutException
+
+    for attempt in range(retries + 1):
+        try:
+            driver.get(url)
+            return
+        except TimeoutException:
+            if attempt < retries:
+                try:
+                    driver.refresh()
+                except Exception:
+                    pass
+            else:
+                raise
 
 
 class SijisheBrowserAdapter:
@@ -44,6 +74,8 @@ class SijisheBrowserAdapter:
         config: SiteConfig,
         driver_factory: Callable[[], Any] | None = None,
         challenge_timeout_seconds: int = LOGIN_TIMEOUT_SECONDS,
+        node_switcher: Callable[[set[str]], str | None] | None = None,
+        api_port: int = PROXY_API_PORT,
     ):
         self.config = config
         self._driver_factory = driver_factory or (
@@ -51,6 +83,10 @@ class SijisheBrowserAdapter:
         )
         self._stats = SessionCacheStats()
         self._challenge_timeout = challenge_timeout_seconds
+        self._api_port = api_port
+        self._node_switcher = node_switcher or (
+            lambda exclude: switch_to_next(self._api_port, exclude)
+        )
 
     @property
     def session_cache_stats(self) -> SessionCacheStats:
@@ -193,6 +229,42 @@ class SijisheBrowserAdapter:
     # --- 主流程 -------------------------------------------------------------
 
     def run(self, account: Account) -> AccountResult:
+        """跑一次签到；被 Cloudflare 拦下就换节点重试。
+
+        免费源里可用节点很多，被拦时换节点远比原地等待划算——换一个干净出口
+        往往一次就过。
+        """
+        tried: set[str] = set()
+        last_error = "未知错误"
+        for attempt in range(MAX_NODE_SWITCHES + 1):
+            try:
+                return self._run_once(account)
+            except CloudflareBlocked as exc:
+                last_error = str(exc)
+                if attempt >= MAX_NODE_SWITCHES:
+                    break
+                logger.info(
+                    "site=%s account=%s 被 Cloudflare 拦下，换节点重试（第 %d 次）：%s",
+                    self.config.name,
+                    mask_username(account.username),
+                    attempt + 1,
+                    last_error,
+                )
+                # 排除当前节点，避免换到同一个
+                current = getattr(self, "_current_node", None)
+                if current:
+                    tried.add(current)
+                nxt = self._node_switcher(tried)
+                if not nxt:
+                    break
+                self._current_node = nxt
+        return AccountResult(
+            account.username,
+            CheckInStatus.ERROR,
+            f"多次换节点后仍被 Cloudflare 拦下：{redact_text(last_error)[:150]}",
+        )
+
+    def _run_once(self, account: Account) -> AccountResult:
         try:
             with self._new_driver() as driver:
                 base = self.config.base_url.rstrip("/")
@@ -215,6 +287,8 @@ class SijisheBrowserAdapter:
                     result = self._sign_in(driver, base, sign_page, account.username)
                 self._persist_session(driver, account.username)
                 return result
+        except CloudflareBlocked:
+            raise  # 交给 run() 换节点
         except LoginBlockedError as exc:
             return AccountResult(account.username, CheckInStatus.LOGIN_BLOCKED, str(exc))
         except LoginError as exc:
@@ -226,6 +300,11 @@ class SijisheBrowserAdapter:
                 account.username, CheckInStatus.SITE_UNAVAILABLE, redact_text(str(exc))[:200]
             )
         except Exception as exc:
+            # renderer 挂死是当前节点被 CF 拦住的最典型表现，换节点即可。
+            from selenium.common.exceptions import WebDriverException
+
+            if isinstance(exc, WebDriverException):
+                raise CloudflareBlocked(f"浏览器被拦：{type(exc).__name__}") from exc
             detail = redact_text(str(exc))[:200] or "未知异常"
             logger.warning(
                 "site=%s account=%s 浏览器运行异常: %s",
@@ -246,9 +325,10 @@ class SijisheBrowserAdapter:
             if attempt > 0 and self.config.network.retry_delay_seconds > 0:
                 time.sleep(self.config.network.retry_delay_seconds)
             logger.debug("login step=page site=%s attempt=%d", self.config.name, attempt + 1)
-            driver.get(f"{base}/member.php?mod=logging&action=login")
+            _get_with_retry(driver, f"{base}/member.php?mod=logging&action=login")
             if not self._wait_clear(driver):
-                continue
+                # 质询迟迟不过，换节点比继续等这个出口划算
+                raise CloudflareBlocked("登录页 Cloudflare 质询未通过")
             try:
                 form = driver.find_element(By.XPATH, '//form[.//input[@name="username"]]')
                 username_input = form.find_element(By.CSS_SELECTOR, 'input[name="username"]')
@@ -287,9 +367,9 @@ class SijisheBrowserAdapter:
         from selenium.webdriver.common.by import By
 
         for _ in range(2):
-            driver.get(sign_page)
+            _get_with_retry(driver, sign_page)
             if not self._wait_clear(driver):
-                raise CheckInError("签到页被 Cloudflare 质询拦截")
+                raise CloudflareBlocked("签到页 Cloudflare 质询未通过")
             html = self._source(driver)
             if any(marker in html for marker in DISCUZ_ALREADY_MARKERS):
                 return AccountResult(username, CheckInStatus.ALREADY_CHECKED_IN)

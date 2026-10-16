@@ -7,8 +7,9 @@
 订阅源是公开的 raw 链接，无需凭据；节点定义原样使用，只有 rules 被替换
 （订阅自带 9000+ 条含 GEOIP 的规则会触发 MMDB 下载，受限网络下超时即 fatal）。
 
-内置多个源并按顺序回退：免费节点寿命以小时计，单个源随时可能整体失效，
-一次 CI 跑失败不该让签到整体停摆。
+选节点用 mihomo 的 url-test 组：**并行**测速全部节点，且以签到页返回 200 为健康标准，
+所以只有真能过 Cloudflare 的节点会被选中。内置多个源并按顺序回退：免费节点寿命以小时计，
+单个源随时可能整体失效，一次 CI 跑失败不该让签到整体停摆。
 """
 
 from __future__ import annotations
@@ -50,26 +51,93 @@ def _platform_tag() -> str:
     return f"{os_tag}-{arch}"
 PROXY_PORT = 7890
 API_PORT = 9090
-# 探到多快就收手。免费节点延迟普遍在秒级，2.5s 内可达的节点足够浏览器用。
-GOOD_LATENCY_SECONDS = 2.5
-
-
-def api_select(api_port: int, name: str) -> None:
-    """Point the GLOBAL group at one node via the external controller."""
-    import json
-
-    request = urllib.request.Request(
-        f"http://127.0.0.1:{api_port}/proxies/GLOBAL",
-        method="PUT",
-        data=json.dumps({"name": name}).encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - localhost
-        response.read()
+# 健康检查盯签到页面，而非 plugin.php：实测存在「plugin.php 能开、签到页在浏览器里
+# 挂死」的节点，签到页才是浏览器成败的预测指标。expected-status=200 让 mihomo 只在
+# 真过了 Cloudflare 的节点里挑，返回 403 质询页的节点会被直接排除。
+HEALTH_CHECK_URL = "https://xsijishe.net/k_misign-sign.html"
+HEALTH_TIMEOUT_MS = 5000
+# url-test 组在测速过程中 now 会是这些占位值，不是真实节点名。
+_PSEUDO_NODES = {"", "COMPATIBLE", "DIRECT", "REJECT", "PASS", "GLOBAL"}
 
 
 class ProxySetupError(RuntimeError):
     """Raised when the local proxy cannot be brought up."""
+
+
+def _api(api_port: int, path: str, payload: dict | None = None):
+    """Talk to mihomo's external controller on localhost."""
+    import json
+
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{api_port}{path}",
+        method="PUT" if payload is not None else "GET",
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310 - localhost
+        return json.loads(response.read() or b"{}")
+
+
+def api_select(api_port: int, name: str) -> None:
+    """Point the GLOBAL group at one node via the external controller."""
+    _api(api_port, "/proxies/GLOBAL", {"name": name})
+
+
+def _group_delays(api_port: int) -> dict[str, int]:
+    """Ask mihomo to re-test the whole group **in parallel**; return node → ms.
+
+    This is the parallel sweep: one call tests every node at once, instead of
+    the serial per-node probing that made picking a node so slow.
+    """
+    import urllib.parse
+
+    path = (
+        f"/group/GLOBAL/delay?url={urllib.parse.quote(HEALTH_CHECK_URL, safe='')}"
+        f"&timeout={HEALTH_TIMEOUT_MS}"
+    )
+    try:
+        return _api(api_port, path) or {}
+    except Exception:
+        return {}
+
+
+def _wait_for_group(api_port: int, timeout: float = 90.0) -> str:
+    """Block until url-test settles, then return the node it picked.
+
+    ``now`` flaps while the parallel sweep is still running, so require the same
+    value twice in a row before trusting it.
+    """
+    deadline = time.time() + timeout
+    previous = None
+    while time.time() < deadline:
+        try:
+            now = _api(api_port, "/proxies/GLOBAL").get("now") or ""
+        except Exception:
+            now = ""
+        if now not in _PSEUDO_NODES and now == previous:
+            return now
+        previous = now
+        time.sleep(1)
+    return ""
+
+
+def switch_to_next(api_port: int, exclude: set[str]) -> str | None:
+    """Pick the fastest node not already tried; ``None`` when none is left.
+
+    Used when Cloudflare blocks the chosen node mid-run: the free pool has plenty
+    of nodes, so switching beats waiting.
+    """
+    delays = _group_delays(api_port)
+    candidates = sorted(
+        (ms, name)
+        for name, ms in delays.items()
+        if isinstance(ms, int) and ms > 0 and name not in exclude
+    )
+    if not candidates:
+        return None
+    chosen = candidates[0][1]
+    api_select(api_port, chosen)
+    return chosen
 
 
 def _download(url: str, dest: Path, timeout: int = 120) -> None:
@@ -121,62 +189,24 @@ def _write_config(subscription: Path, out: Path, proxy_port: int, api_port: int)
         "ipv6": False,
         "external-controller": f"127.0.0.1:{api_port}",
         "proxies": proxies,
-        "proxy-groups": [{"name": "GLOBAL", "type": "select", "proxies": names}],
+        "proxy-groups": [
+            {
+                # url-test 并行测速所有节点，只留下真能过 Cloudflare 的：
+                # 签到页返回 200 才算健康，403 质询页的节点被自动排除。
+                "name": "GLOBAL",
+                "type": "url-test",
+                "url": HEALTH_CHECK_URL,
+                "interval": 300,
+                "tolerance": 50,
+                "lazy": False,
+                "expected-status": 200,
+                "proxies": names,
+            }
+        ],
         "rules": ["MATCH,GLOBAL"],
     }
     out.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
     return names
-
-
-def _probe_node(api_port: int, name: str, proxy_port: int, timeout: float = 20.0) -> float | None:
-    """Switch to a node, measure how fast the target answers through it.
-
-    Returns the elapsed seconds, or ``None`` when the node is unreachable. The
-    latency matters as much as reachability: a node that barely answers inside
-    ``timeout`` still hangs the browser, so the caller picks the fastest node.
-    """
-    import json
-    import urllib.error
-
-    def api(method: str, path: str, payload: dict | None = None):
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{api_port}{path}",
-            method=method,
-            data=json.dumps(payload).encode() if payload else None,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - localhost
-            return json.loads(response.read() or b"{}")
-
-    try:
-        api("PUT", "/proxies/GLOBAL", {"name": name})
-    except Exception:
-        return None
-    time.sleep(0.5)
-    # 探实际会被 WAF 拦截的接口，而非只能开的签到页面：
-    started = time.time()
-    try:
-        # 探实际会被 WAF 拦截的接口，而非只能开的签到页面：
-        # 页面能开不代表 plugin.php 能通，浏览器卡在那里就会 renderer 超时。
-        # 不带 formhash 也没关系——只要收到 HTTP 响应（含 403 质询），
-        # 就说明链路通，浏览器能自己去过质询。
-        request = urllib.request.Request(
-            "https://xsijishe.net/plugin.php?id=k_misign:sign&operation=qiandao"
-            "&format=empty&inajax=1&ajaxtarget=JD_sign",
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
-        )
-        opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler(
-                {"http": f"http://127.0.0.1:{proxy_port}", "https": f"http://127.0.0.1:{proxy_port}"}
-            )
-        )
-        opener.open(request, timeout=timeout)
-        return time.time() - started
-    except urllib.error.HTTPError:
-        # 有 HTTP 响应（含 403 质询）说明链路通，浏览器可以自己去过质询
-        return time.time() - started
-    except Exception:
-        return None
 
 
 def _subscriptions(override: str) -> tuple[str, ...]:
@@ -216,29 +246,19 @@ def _setup_one(
     if process.poll() is not None:
         raise ProxySetupError(f"mihomo 启动失败，见 {work / 'mihomo.log'}")
     try:
-        best: tuple[str, float] | None = None
-        for name in names:
-            latency = _probe_node(api_port, name, proxy_port)
-            if latency is None:
-                continue
-            # 免费源里首节点往往已经半死：TCP 能连但每次请求挂几十秒，
-            # 浏览器随即 renderer 超时。所以取最快节点，不是第一个可达的。
-            if best is None or latency < best[1]:
-                best = (name, latency)
-                print(
-                    f"节点可用 {name} 延迟 {latency:.1f}s（共 {len(names)}）", flush=True
-                )
-            if latency <= GOOD_LATENCY_SECONDS:
-                break  # 够快了，不必试完
-        if best is not None:
-            api_select(api_port, best[0])
+        # url-test 组启动后自动并行测速全部节点，等到它稳定下来。
+        chosen = _wait_for_group(api_port)
+        if chosen:
+            delays = _group_delays(api_port)
+            latency = delays.get(chosen, 0)
             print(
-                f"已选定节点 {best[0]} 延迟 {best[1]:.1f}s"
-                f"（订阅源 {index + 1}/{total}，共 {len(names)} 节点）",
+                f"已选定节点 {chosen} 延迟 {latency}ms"
+                f"（订阅源 {index + 1}/{total}，共 {len(names)} 节点，"
+                f"其中 {len([d for d in delays.values() if isinstance(d, int) and d > 0])} 个可用）",
                 flush=True,
             )
             return 0
-        raise ProxySetupError("所有节点均不可用")
+        raise ProxySetupError("所有节点均不可用（无节点能通过签到页健康检查）")
     except BaseException:
         process.terminate()
         raise
