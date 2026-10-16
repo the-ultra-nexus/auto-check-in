@@ -17,14 +17,14 @@ from auto_check_in.config import (
     SiteConfig,
     load_config,
     parse_accounts,
-    parse_pool_urls,
+    parse_proxy_url,
 )
 from auto_check_in.discuz import (
     classify_discuz_response,
     extract_formhash,
     parse_login_dialog,
 )
-from auto_check_in.http import USER_AGENTS, SessionProvider, ua_headers
+from auto_check_in.http import USER_AGENTS, ua_headers
 from auto_check_in.models import AccountResult, CheckInStatus, RunSummary
 from auto_check_in.runner import run
 from auto_check_in.security import mask_username, redact_text
@@ -244,7 +244,7 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("SITE_SIJISHE_ACCOUNTS", message)
         self.assertIn("SITE_CONFIGS", message)
 
-    def test_global_pool_urls_parsed(self):
+    def test_browser_proxy_url_parsed(self):
         path = write_config("")
         config = load_config(
             path,
@@ -252,13 +252,10 @@ class ConfigTests(unittest.TestCase):
                 "CHECK_IN_SITES": "sijishe",
                 "SITE_SIJISHE_BASE_URL": "https://a.example",
                 "SITE_SIJISHE_ACCOUNTS": "u&p",
-                "CHECK_IN_PROXY_POOL_URLS": "https://pool.example/data.txt,https://pool2.example/list.txt",
+                "CHECK_IN_BROWSER_PROXY": "http://127.0.0.1:7890",
             },
         )
-        self.assertEqual(
-            config.sites[0].network.proxy_pool_urls,
-            ("https://pool.example/data.txt", "https://pool2.example/list.txt"),
-        )
+        self.assertEqual(config.sites[0].network.proxy_url, "http://127.0.0.1:7890")
 
     def test_direct_first_default_true(self):
         path = write_config("")
@@ -316,7 +313,7 @@ class ConfigTests(unittest.TestCase):
                 },
             )
 
-    def test_invalid_pool_url_rejected(self):
+    def test_invalid_browser_proxy_rejected(self):
         path = write_config("")
         with self.assertRaises(ConfigError):
             load_config(
@@ -325,33 +322,20 @@ class ConfigTests(unittest.TestCase):
                     "CHECK_IN_SITES": "sijishe",
                     "SITE_SIJISHE_BASE_URL": "https://a.example",
                     "SITE_SIJISHE_ACCOUNTS": "u&p",
-                    "CHECK_IN_PROXY_POOL_URLS": "ftp://1.2.3.4:21",
+                    "CHECK_IN_BROWSER_PROXY": "socks5://1.2.3.4:1080",
                 },
             )
 
-    def test_pool_urls_in_toml_rejected(self):
-        path = write_config("[network]\nproxy_pool_urls = ['https://pool.example/data.txt']\n")
-        with self.assertRaises(ConfigError):
-            load_config(
-                path,
-                {
-                    "CHECK_IN_SITES": "sijishe",
-                    "SITE_SIJISHE_BASE_URL": "https://a.example",
-                    "SITE_SIJISHE_ACCOUNTS": "u&p",
-                },
-            )
-
-    def test_parse_pool_urls_validation(self):
-        self.assertEqual(parse_pool_urls(None), ())
-        self.assertEqual(parse_pool_urls("  "), ())
+    def test_parse_proxy_url_validation(self):
+        self.assertEqual(parse_proxy_url(None), "")
+        self.assertEqual(parse_proxy_url("  "), "")
         self.assertEqual(
-            parse_pool_urls("https://pool.example/data.txt, https://pool2.example/list.txt,,"),
-            ("https://pool.example/data.txt", "https://pool2.example/list.txt"),
+            parse_proxy_url("http://127.0.0.1:7890"), "http://127.0.0.1:7890"
         )
         with self.assertRaises(ConfigError):
-            parse_pool_urls("socks5://1.2.3.4:1080")
+            parse_proxy_url("socks5://1.2.3.4:1080")
         with self.assertRaises(ConfigError):
-            parse_pool_urls("https://")
+            parse_proxy_url("https://")
 
     def test_recognition_log_emitted(self):
         path = write_config("[runtime]\nenabled_sites = ['sijishe']\n")
@@ -452,17 +436,12 @@ class DiscuzParsingTests(unittest.TestCase):
         self.assertIs(status, CheckInStatus.CHECK_IN_FAILED)
 
 
-class SessionProviderTests(unittest.TestCase):
-    def test_provider_session_has_ua_and_network_defaults(self):
-        provider = SessionProvider(NetworkConfig())
-        session = provider.new_session()
-        try:
-            self.assertIn("User-Agent", session.headers)
-            self.assertIn(session.headers["User-Agent"], USER_AGENTS)
-            self.assertEqual(provider.network.request_timeout_seconds, 15)
-            self.assertEqual(provider.network.request_delay_seconds, 3.0)
-        finally:
-            session.close()
+class NetworkDefaultsTests(unittest.TestCase):
+    def test_network_defaults(self):
+        network = NetworkConfig()
+        self.assertEqual(network.request_timeout_seconds, 15)
+        self.assertEqual(network.request_delay_seconds, 3.0)
+        self.assertEqual(network.proxy_url, "")
 
     def test_ua_headers_uses_pool(self):
         headers = ua_headers({"Referer": "https://example.test"})
@@ -625,7 +604,7 @@ class RedactionTests(unittest.TestCase):
         from auto_check_in.config import ConfigError
 
         try:
-            parse_pool_urls("https://u:p@pool.example/data.txt,socks5://u:p@9.9.9.9:9999")
+            parse_proxy_url("socks5://u:p@9.9.9.9:9999")
         except ConfigError as exc:
             redacted = redact_text(str(exc))
         self.assertIn("socks5://***@9.9.9.9:9999", redacted)
@@ -706,7 +685,9 @@ class DependencyTests(unittest.TestCase):
     def test_no_obsolete_dependencies(self):
         pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
         text = pyproject.read_text(encoding="utf-8")
-        for name in ("selenium", "ddddocr", "opencv", "onnxruntime"):
+        # selenium 是 sijishe-browser 适配器必需的（纯 HTTP 客户端过不了 CF 的 JS 质询）；
+        # 验证码 OCR 路线仍然排除。
+        for name in ("ddddocr", "opencv", "onnxruntime"):
             self.assertNotIn(name, text)
 
 

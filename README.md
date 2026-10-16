@@ -1,13 +1,15 @@
 # Auto Check In
 
-纯 HTTP 的多站点自动签到工具。每个站点由独立适配器实现登录与签到，环境数据完全隔离；多个站点在同一次运行中并行执行。
+多站点自动签到工具。每个站点由独立适配器实现登录与签到，环境数据完全隔离；多个站点在同一次运行中并行执行。
+
+需要穿过 Cloudflare 的站点走**真实 Chrome**（纯 HTTP 客户端没有 JS 引擎，必然被质询页拦下），出口经本地 mihomo 指向订阅节点。
 
 ## 功能特性
 
 - 多站点并行调度，站点间环境与失败完全隔离
-- 代理池按需补给：直连优先（首个请求先直连，成功即用、0 池成本），直连失败才从多个 IP 池拉取一小批（并行粗探、凑满即停），批次耗尽再取下一批
-- 代理失败轮换：请求因代理连接失败或被站点拒绝（403/429/5xx）时自动切换下一个代理
-- 登录会话缓存：有效期内复用 cookie，失效自动重登
+- 浏览器适配器：整条链路（登录 + 签到）在真实 Chrome 内完成，可过 Cloudflare 的 JS 质询
+- 出口代理：CI 里起本地 mihomo，逐个探活订阅节点并选定一个，浏览器走该端口
+- 登录会话缓存：有效期内复用 cookie（含 `cf_clearance`），失效自动重登
 - 多通知渠道：SMTP / 钉钉 / 企业微信 / 飞书 / Server 酱 / Bark / Telegram / PushPlus / PushDeer / Webhook / ntfy / 控制台
 - 全部凭据与敏感配置只走环境变量 / GitHub Secrets，禁止写入配置文件，日志全程脱敏
 
@@ -57,11 +59,10 @@ uv run auto-check-in --config config/check-in.toml --dry-run
 多站点并行调度（CHECK_IN_SITES，默认并行度 min(站点数, 4)）
         │
         ▼ 每个站点：独立环境变量 + 独立 HTTP 会话（批次按站点隔离）
-直连优先：首个站点请求先直连（短超时预算，快失败）
-   │ 成功（2xx/3xx）→ 粘住直连，不拉批（0 池成本）
-   └ 失败（403/429/5xx/超时/拒连）→ 拉批：拉取多个池 → 解析/去重 → 并行粗探
-     （connect 2s / total 4s，2xx/3xx 可用）凑满 5 个即停；批次耗尽 → 取下一批
-     （最多 5 批）；池失败 → 直连兜底（warn）
+起本地 mihomo（proxy_setup）：拉订阅 → 重写为本地配置 → 逐个探活选节点
+   │ 全部不可用 → 代理启动失败（退出码 1）
+   ▼
+Chrome 启动，--proxy-server 指向 127.0.0.1:7890
         │
         ▼
 加载会话缓存并验证登录态
@@ -84,64 +85,49 @@ GET 签到页 → 解析 formhash → GET 签到接口
 保存会话缓存 → 汇总 → 通知 → 退出码（0/1/2）
 ```
 
-## 代理池与失败轮换
+## 浏览器与出口代理
 
-代理只作用于站点登录/签到流量，通知渠道不受影响。代理一律来自 IP 池的按需分批补给，不再支持手写静态代理列表。
+### 为什么必须用浏览器
 
-### 配置
+Cloudflare 对 GitHub runner 的机房 IP 段风险判定高，直连时签到接口会被质询页拦下。
+纯 HTTP 客户端（`requests` / `curl_cffi`）**没有 JS 引擎**，无论出口 IP 好坏都会撞上
+质询页——用它们测「IP 行不行」是无效实验（403 的响应体就是 CF 的质询脚本）。
+
+因此整条链路放进真实 Chrome，且 `cf_clearance` 绑定 TLS 指纹与会话，**不能**过完质询
+再交给 HTTP 客户端复用，登录与签到必须在同一个浏览器会话内完成。
+
+### 出口代理
 
 ```bash
-# 逗号分隔多个 IP 池 URL，每个池返回代理列表（一行一个或逗号分隔）
-export CHECK_IN_PROXY_POOL_URLS='xxxx'
+# 浏览器出口（CI 里由 proxy_setup 起本地 mihomo）
+export CHECK_IN_BROWSER_PROXY='http://127.0.0.1:7890'
+# 订阅地址（可选，留空用内置公开源）
+export CHECK_IN_PROXY_SUBSCRIPTION='https://example.com/subscription.yaml'
 ```
 
-- 只允许环境变量 / GitHub Secret 提供，写入配置文件会直接报错（与凭据同等对待）
-- GitHub Actions 中放入同名 Secret 即可，工作流已内置 `env` 映射
+启动代理：
 
-### 池格式
+```bash
+uv run python -m auto_check_in.proxy_setup
+```
 
-每行（或逗号分隔条目）支持三种格式，混用亦可：
+- 下载 mihomo 内核（按平台选 `linux`/`darwin` × `amd64`/`arm64` 的 `compatible` 构建）
+- 拉订阅，**节点定义原样保留**（vless 的 `tls`/`flow`/`reality-opts` 手写解析极易遗漏），只把 `rules` 换成一条 `MATCH,GLOBAL`
+  —— 订阅自带的数千条含 `GEOIP` 的规则会触发 MMDB 下载，受限网络下超时即 fatal 退出
+- 逐个切换节点探活，选定第一个可达的
+- 订阅是公开 raw 链接，无需凭据；`CHECK_IN_PROXY_SUBSCRIPTION` 只走环境变量 / 仓库变量
 
+### 判定页面状态
 
-| 格式                         | 示例                            |
-| -------------------------- | ----------------------------- |
-| `host:port`                | `1.2.3.4:8080`                |
-| `http(s)://host:port`      | `http://1.2.3.4:8080`         |
-| 空白/制表符分隔表格（取前两列 ip 与 port） | `1.2.3.4 8080 HTTP(S) 国家 ...` |
-
-
-拉取后按 `host:port` 去重并截断上限，非法行跳过并计数。
-
-### 直连优先与拉批
-
-**直连优先**（站点级 `direct_first`，默认开启，等价于把本机 IP 作为池的首位候选）：会话第一个请求（GET 签到页）先直连，短超时预算（复用粗探 connect 2s / total 4s）保证快失败。
-
-- 直连返回 `2xx`/`3xx` → 直接返回并粘住直连，**不拉批（0 池成本）**
-- 直连失败（`403`/`429`/`5xx`/超时/拒连/TLS）→ **才拉批**，用批内代理重试同一请求；直连粘住期间后续请求再失败 → 同样拉批重试
-- 站点关闭 `direct_first`（该站实验后直连成功率持续为 0 时）→ 无条件先拉批再发请求；在 `SITE_CONFIGS` 每站点设 `"direct_first": false`，本地可用 `SITE_<NAME>_DIRECT_FIRST=false`（env 优先，禁止写入 TOML）
-
-拉批本身：
-
-- **批次按站点隔离**：每个站点的会话各自拉批、各自持有与轮换，站点间不共享批次
-- 拉取多个池 → 解析/去重 → **并行粗探**（并发 10，连接 2s / 总 4s），只保留 `2xx`/`3xx`
-- **凑满 5 个可用即停**（`BATCH_SIZE=5`，不全量探完）；批次耗尽 → 取下一批（每次拉取最多 `MAX_BATCHES=5` 批）
-- **账号预算** `MAX_BATCHES_PER_ACCOUNT=2`：单账号最多成功拿到 2 批（空响应也计入），池不可用时失败路径约 2 分钟而非 5 分钟，避免多账号线性放大撞 CI 超时
-- 批次上限内仍失败 → 抛最后一个错误，该账号 `site-unavailable`；池拉取失败/取不到代理 → 直连兜底 + warn，不中断 run
+判 Cloudflare 质询**只看 `driver.title`**。CF 在**成功页面**里也会注入 `challenge-platform`
+和 `__CF$cv$params` 脚本，用这两个字符串判质询会在正常页面上误报。
 
 ### 触发边界
 
-
-| 失败信号                                         | 含义              | 处理                            |
-| -------------------------------------------- | --------------- | ----------------------------- |
-| `403`/`429`/`5xx`/超时/拒连/TLS 失败               | 传输层：当前 IP/代理不可用 | 取下一批换 IP，重试同一请求               |
-| 页面 `200` 但未登录/无 formhash/签到返回 `login-failed` | 会话层：cookie 失效   | **不拉池**，清 cookie 重新登录（复用当前批次） |
-
-
-### 与失败轮换的分层
-
-- **直连优先 + 按需补给**：直连能通则 0 池成本；直连失败才拉批，批次耗尽再取下一批
-- **失败轮换**（`FailoverSession`）是兜底：批内代理仍可能失效，请求因代理连接失败或被站点拒绝（403/429/5xx）时自动按序切换下一个代理，成功后保持（粘性）
-- 免费代理池时效短（1~10 分钟轮换）、多为数据中心 IP，实际可用率可能很低；多配几个池提高冗余，必要时考虑付费/自建稳定代理
+| 失败信号 | 含义 | 处理 |
+| --- | --- | --- |
+| 签到页 title 含 `Just a moment` 且超时 | 质询未过 | 该账号 `check-in-failed` |
+| 页面 200 但未登录/无 formhash/签到返回 `login-failed` | 会话层：cookie 失效 | 清 cookie 重新登录一次（复用同一浏览器） |
 
 ## 环境变量
 
@@ -154,7 +140,8 @@ export CHECK_IN_PROXY_POOL_URLS='xxxx'
 | 通用  | `SITE_CONFIGS`             | JSON Secret，包含全部站点的地址与账号（CI 用）                                                |
 | 通用  | `CHECK_IN_MAX_WORKERS`     | 站点并行度，默认 `min(站点数, 4)`                                                        |
 | 通用  | `AUTO_CHECK_IN_CONFIG`     | 配置文件路径，默认 `config/check-in.toml`                                              |
-| 代理  | `CHECK_IN_PROXY_POOL_URLS` | 逗号分隔多个 IP 池 URL，按需分批补给（直连优先、失败才拉批、批次按站点隔离）                                    |
+| 代理  | `CHECK_IN_BROWSER_PROXY`   | 浏览器出口代理，如 `http://127.0.0.1:7890`（CI 里由 `proxy_setup` 起本地 mihomo）                  |
+| 代理  | `CHECK_IN_PROXY_SUBSCRIPTION` | 订阅地址，留空用内置公开源；节点定义原样使用，只有 `rules` 被替换                                      |
 | 网络  | `CHECK_IN_REQUEST_TIMEOUT` | 单请求超时秒，默认 15                                                                  |
 | 网络  | `CHECK_IN_RETRIES`         | 业务重试次数，默认 3                                                                   |
 | 网络  | `CHECK_IN_RETRY_DELAY`     | 登录重试间隔秒，默认 3.0（设 0 关闭）                                                         |
@@ -166,7 +153,7 @@ export CHECK_IN_PROXY_POOL_URLS='xxxx'
 | 通知  | 见下方“通知方式”表                 | 各渠道凭据均为 Secret 透传                                                             |
 | 站点级 | `SITE_<NAME>_BASE_URL`     | 站点地址                                                                          |
 | 站点级 | `SITE_<NAME>_ACCOUNTS`     | 该站点账号，`账号&密码`，多个用换行/`@` 分隔                                                    |
-| 站点级 | `SITE_<NAME>_DIRECT_FIRST` | 该站直连优先开关，`true`/`false`（默认 `true`），env 优先于 `SITE_CONFIGS` 的 `direct_first` 字段 |
+| 站点级 | `SITE_<NAME>_ADAPTER`      | 该站适配器名，穿过 Cloudflare 的站点用 `sijishe-browser`                                   |
 | 站点级 | `SITE_<NAME>_SIGN_PATH`    | 签到页路径（默认 `/k_misign-sign.html`），env 优先于 `SITE_CONFIGS` 的 `sign_path` 字段       |
 
 
@@ -233,9 +220,11 @@ CI 缓存卫生（工作流内置步骤）：
 
 工作流位于 [.github/workflows/check-in.yml](.github/workflows/check-in.yml)，每天 08:00（Asia/Shanghai）运行，亦可在 Actions 页面手动触发。请在仓库 Settings → Secrets and variables → Actions 中设置：
 
+工作流只有一个 `check-in` job（25 分钟超时）：先起本地 mihomo 选节点，再让浏览器经该端口跑完整签到。
+
 - 必需：`SITE_CONFIGS`（JSON Secret，包含全部站点的地址与账号）
 - 可选：仓库变量 `CHECK_IN_SITES`（逗号分隔，只运行部分站点；留空则运行 `SITE_CONFIGS` 里全部站点）
-- 可选：`CHECK_IN_PROXY_POOL_URLS`（逗号分隔多个 IP 池 URL，直连失败后按需分批补给）
+- 可选：仓库变量 `CHECK_IN_PROXY_SUBSCRIPTION`（订阅地址，留空用内置公开源）
 - 按通知渠道选填：`BARK_PUSH`、`PUSH_KEY`、`FSKEY`、`TG_BOT_TOKEN`、`TG_USER_ID`、`DD_BOT_TOKEN`/`DD_BOT_SECRET`、`QYWX_KEY`、`SMTP_SERVER`/`SMTP_SSL`/`SMTP_EMAIL`/`SMTP_PASSWORD`/`SMTP_NAME`（可选 `SMTP_STARTTLS`/`SMTP_PORT`/`SMTP_TO`）
 
 `SITE_CONFIGS` 完整示例见仓库根目录 [SITE_CONFIGS.example.json](SITE_CONFIGS.example.json)，要点如下：
@@ -245,17 +234,17 @@ CI 缓存卫生（工作流内置步骤）：
   "sijishe": {
     "base_url": "https://xsijishe.net",
     "accounts": "账号1&密码1@账号2&密码2",
-    "direct_first": true
+    "adapter": "sijishe-browser"
   },
   "site2": {
     "base_url": "https://site2.example",
     "accounts": "账号A&密码A",
-    "direct_first": false
+    "adapter": "sijishe-browser"
   }
 }
 ```
 
-`direct_first` 为可选字段（默认 `true`）：`false` 表示该站点不尝试直连、无条件先拉批再发请求。
+`adapter` 指定该站的适配器；穿过 Cloudflare 的站点用 `sijishe-browser`（也可用 `SITE_<NAME>_ADAPTER` 环境变量覆盖）。
 
 新增站点只需更新这一个 Secret，无需改动工作流。Secrets 只作为环境变量传递，不会被打印。手动触发工作流时可在 “sites” 输入框临时指定站点（逗号分隔），留空则按仓库变量或全部站点运行。
 
@@ -265,8 +254,8 @@ CI 缓存卫生（工作流内置步骤）：
 “登录被拦截”。站点实际可达（登录弹框、formhash 均正常），只是登录提交被站点端拒绝，常见原因与排查：
 
 1. **站点 WAF / 防机器人**：对自动化登录做了风控。稍后重试、或换时段再跑一次看是否恢复。
-2. **出口 IP 被封**：GitHub runner 出口 IP 被站点封禁。可配置 `CHECK_IN_PROXY_POOL_URLS` 换代理出口重试，
- 或先在本机（住宅 IP）用相同凭据跑一次确认 `uv run auto-check-in --config config/check-in.toml --dry-run`
+2. **出口 IP 被封**：GitHub runner 出口 IP 被站点封禁。设置 `CHECK_IN_PROXY_SUBSCRIPTION` 换一组节点重试，
+ 或先在本机用相同凭据跑一次确认 `uv run auto-check-in --config config/check-in.toml --dry-run`
  识别正常、实际运行能登录。
 3. **凭据问题**：核对 `SITE_CONFIGS` Secret 与本地 `SITE_SIJISHE_ACCOUNTS` 是否一致、账号密码是否有效。
 

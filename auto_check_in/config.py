@@ -6,7 +6,7 @@ import json
 import os
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlsplit
@@ -16,7 +16,7 @@ from .models import Account
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "check-in.toml"
 _SITE_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
-_NETWORK_KEYS = {"request_timeout_seconds", "retries", "retry_delay_seconds", "request_delay_seconds"}
+_NETWORK_KEYS = {"request_timeout_seconds", "retries", "retry_delay_seconds", "request_delay_seconds", "browser_proxy"}
 _TOP_LEVEL_KEYS = {"runtime", "notification", "sites", "network", "enabled_sites", "max_workers", "session_cache", "session_dir", "session_max_age_seconds", "notification_title", "notify"}
 _RUNTIME_KEYS = {"enabled_sites", "max_workers", "session_cache", "session_dir", "session_max_age_seconds"}
 _NOTIFICATION_KEYS = {"title", "enabled"}
@@ -35,7 +35,7 @@ class NetworkConfig:
     retries: int = 3
     retry_delay_seconds: float = 3.0
     request_delay_seconds: float = 3.0
-    proxy_pool_urls: tuple[str, ...] = ()
+    proxy_url: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,29 +116,23 @@ def parse_accounts(payload: str | None) -> tuple[Account, ...]:
     return tuple(accounts)
 
 
-def parse_pool_urls(payload: str | None) -> tuple[str, ...]:
-    """Parse a comma-separated HTTP(S) proxy pool URL list without logging the payload."""
-    if not payload or not payload.strip():
-        return ()
-    proxies: list[str] = []
-    for index, raw in enumerate(payload.split(","), start=1):
-        value = raw.strip()
-        if not value:
-            continue
-        parsed = urlsplit(value)
-        if parsed.scheme not in _PROXY_SCHEMES or not parsed.netloc:
-            raise ConfigError(
-                f"第 {index} 个代理地址格式错误，应为 http://host:port "
-                f"或 http://user:pass@host:port: {value!r}"
-            )
-        proxies.append(value)
-    return tuple(proxies)
+def parse_proxy_url(payload: str | None) -> str:
+    """Validate one HTTP(S) proxy URL without logging the payload."""
+    value = (payload or "").strip()
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    if parsed.scheme not in _PROXY_SCHEMES or not parsed.netloc:
+        raise ConfigError(
+            f"代理地址格式错误，应为 http://host:port "
+            f"或 http://user:pass@host:port: {value!r}"
+        )
+    return value
 
 
 def _network_from(
     raw: Mapping[str, object],
     env: Mapping[str, str],
-    proxy_pool_urls: tuple[str, ...] = (),
 ) -> NetworkConfig:
     network = NetworkConfig(
         request_timeout_seconds=_positive_int(
@@ -155,8 +149,10 @@ def _network_from(
         request_delay_seconds=float(
             _env(env, "CHECK_IN_REQUEST_DELAY", str(raw.get("request_delay_seconds", 3.0)))
         ),
-        proxy_pool_urls=proxy_pool_urls,
+        proxy_url=_env(env, "CHECK_IN_BROWSER_PROXY", str(raw.get("browser_proxy", ""))),
     )
+    if network.proxy_url:
+        network = replace(network, proxy_url=parse_proxy_url(network.proxy_url))
     if network.retry_delay_seconds < 0:
         raise ConfigError("CHECK_IN_RETRY_DELAY 不能为负数")
     if network.request_delay_seconds < 0:
@@ -185,12 +181,6 @@ def load_config(
     _warn_unknown("notification", notification_raw, _NOTIFICATION_KEYS)
     global_network_raw = raw.get("network", {}) if isinstance(raw.get("network"), dict) else {}
     _warn_unknown("network", global_network_raw, _NETWORK_KEYS)
-    if "proxy_urls" in global_network_raw or "proxy_pool_urls" in global_network_raw:
-        raise ConfigError(
-            "代理池地址不允许写入配置文件（检测到 [network] proxy_urls / proxy_pool_urls），"
-            "请使用 CHECK_IN_PROXY_POOL_URLS 环境变量/Secret 提供"
-        )
-    pool_urls = parse_pool_urls(_env(env, "CHECK_IN_PROXY_POOL_URLS", ""))
     site_configs: dict[str, dict] = {}
     site_configs_raw = _env(env, "SITE_CONFIGS", "")
     if site_configs_raw:
@@ -271,12 +261,6 @@ def load_config(
             )
             site_network_raw = section.get("network", {}) if isinstance(section.get("network"), dict) else {}
             _warn_unknown(f"sites.{name}.network", site_network_raw, _NETWORK_KEYS)
-            if "proxy_urls" in site_network_raw or "proxy_pool_urls" in site_network_raw:
-                raise ConfigError(
-                    f"站点 {name} 的代理池地址不允许写入配置文件"
-                    f"（检测到 sites.{name}.network.proxy_urls / proxy_pool_urls），"
-                    f"请使用 CHECK_IN_PROXY_POOL_URLS 环境变量/Secret 提供"
-                )
             if "direct_first" in section:
                 raise ConfigError(
                     f"站点 {name} 的 direct_first 不允许写入配置文件（检测到 sites.{name}.direct_first），"
@@ -294,7 +278,7 @@ def load_config(
                     base_url=base_url,
                     accounts=accounts,
                     sign_path=sign_path,
-                    network=_network_from(merged_network, env, pool_urls),
+                    network=_network_from(merged_network, env),
                     direct_first=direct_first,
                     session_cache=session_cache,
                     session_dir=session_dir,

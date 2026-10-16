@@ -6,11 +6,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from auto_check_in.adapters.sijishe import SijisheAdapter
+from auto_check_in.adapters.sijishe_browser import SijisheBrowserAdapter
 from auto_check_in.models import Account, AccountResult, CheckInStatus, RunSummary
 from auto_check_in.session import SessionCacheStats, save_cookies
 
-from helpers import FakeResponse, FakeSession, make_site_config
+from helpers import FakeDriver, make_site_config
 
 
 class SessionCacheStatsTest(unittest.TestCase):
@@ -18,8 +18,8 @@ class SessionCacheStatsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             save_cookies(Path(directory), "sijishe", "alice", {"SgL6_2132_auth": "abc"})
             config = make_site_config(session_cache=True, session_dir=Path(directory))
-            session = FakeSession()
-            adapter = SijisheAdapter(config, session_factory=lambda: session)
+            session = FakeDriver()
+            adapter = SijisheBrowserAdapter(config, driver_factory=lambda: session, challenge_timeout_seconds=1)
             with self.assertLogs("auto_check_in", level="INFO") as logs:
                 result = adapter.run(Account("alice", "pw"))
             self.assertEqual(result.status, CheckInStatus.SUCCESS)
@@ -37,8 +37,8 @@ class SessionCacheStatsTest(unittest.TestCase):
     def test_restore_miss(self):
         with tempfile.TemporaryDirectory() as directory:
             config = make_site_config(session_cache=True, session_dir=Path(directory))
-            session = FakeSession()
-            adapter = SijisheAdapter(config, session_factory=lambda: session)
+            session = FakeDriver()
+            adapter = SijisheBrowserAdapter(config, driver_factory=lambda: session, challenge_timeout_seconds=1)
             with self.assertLogs("auto_check_in", level="INFO") as logs:
                 result = adapter.run(Account("alice", "pw"))
             self.assertEqual(result.status, CheckInStatus.SUCCESS)
@@ -50,14 +50,14 @@ class SessionCacheStatsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             save_cookies(Path(directory), "sijishe", "alice", {"SgL6_2132_auth": "stale"})
             config = make_site_config(session_cache=True, session_dir=Path(directory))
-            session = FakeSession()
-            session.plugin_response = FakeResponse("<html>Discuz! System Error</html>")
+            session = FakeDriver()
+            session.plugin_body = "<html>Discuz! System Error</html>"
             session.fix_after_login = True
-            adapter = SijisheAdapter(config, session_factory=lambda: session)
+            adapter = SijisheBrowserAdapter(config, driver_factory=lambda: session, challenge_timeout_seconds=1)
             with self.assertLogs("auto_check_in", level="INFO") as logs:
                 result = adapter.run(Account("alice", "pw"))
             self.assertEqual(result.status, CheckInStatus.SUCCESS)
-            self.assertTrue(any(method == "POST" for method, _, _ in session.requests))
+            self.assertTrue(session.clicks)
             stats = adapter.session_cache_stats
             self.assertEqual(stats.restored, 1)
             self.assertEqual(stats.rejected, 1)
@@ -65,8 +65,8 @@ class SessionCacheStatsTest(unittest.TestCase):
             self.assertIn("event=rejected", "\n".join(logs.output))
 
     def test_persist_skips_without_auth_cookie(self):
-        adapter = SijisheAdapter(make_site_config(session_cache=True))
-        session = FakeSession()
+        adapter = SijisheBrowserAdapter(make_site_config(session_cache=True), challenge_timeout_seconds=1)
+        session = FakeDriver()
         with self.assertLogs("auto_check_in", level="INFO") as logs:
             adapter._persist_session(session, "alice")
         self.assertEqual(adapter.session_cache_stats.saved, 0)
@@ -76,8 +76,8 @@ class SessionCacheStatsTest(unittest.TestCase):
         )
 
     def test_persist_skips_when_disabled(self):
-        adapter = SijisheAdapter(make_site_config(session_cache=False))
-        session = FakeSession()
+        adapter = SijisheBrowserAdapter(make_site_config(session_cache=False), challenge_timeout_seconds=1)
+        session = FakeDriver()
         with self.assertLogs("auto_check_in", level="INFO") as logs:
             adapter._persist_session(session, "alice")
         self.assertEqual(adapter.session_cache_stats.saved, 0)

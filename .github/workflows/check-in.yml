@@ -17,14 +17,19 @@ permissions:
 jobs:
   check-in:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       # 多站点通用配置：SITE_CONFIGS 为 JSON Secret，包含全部站点；
       # CHECK_IN_SITES 优先取手动输入，其次仓库变量（留空则运行 SITE_CONFIGS 全部站点）
       CHECK_IN_SITES: ${{ inputs.sites || vars.CHECK_IN_SITES }}
       SITE_CONFIGS: ${{ secrets.SITE_CONFIGS }}
-      # 代理（IP 池，逗号分隔多个池 URL；按需分批补给，按需配置对应 Secret）
-      CHECK_IN_PROXY_POOL_URLS: ${{ secrets.CHECK_IN_PROXY_POOL_URLS }}
+      # 浏览器出口代理：CI 里由 proxy_setup 起本地 mihomo，浏览器指向该端口。
+      # 直连时 runner 的机房 IP 会被 Cloudflare 质询拦下，实测经订阅节点可过。
+      CHECK_IN_BROWSER_PROXY: http://127.0.0.1:7890
+      CHECK_IN_PROXY_SUBSCRIPTION: ${{ vars.CHECK_IN_PROXY_SUBSCRIPTION }}
+      # 用浏览器适配器（纯 HTTP 客户端过不了 Cloudflare 的 JS 质询）。
+      # 站点名与 SITE_CONFIGS 的键一致；改名时同步改这里。
+      SITE_SIJISHE_ADAPTER: sijishe-browser
       # 通知渠道（按需配置对应 Secrets）
       BARK_PUSH: ${{ secrets.BARK_PUSH }}
       PUSH_KEY: ${{ secrets.PUSH_KEY }}
@@ -58,6 +63,11 @@ jobs:
 
       - name: Verify env coverage
         run: uv run python -m unittest tests.test_github_workflow -v
+
+      - name: Start local proxy
+        run: |
+          uv run python -m auto_check_in.proxy_setup \
+            ${CHECK_IN_PROXY_SUBSCRIPTION:+--subscription "$CHECK_IN_PROXY_SUBSCRIPTION"}
 
       - name: Restore session cache
         id: restore

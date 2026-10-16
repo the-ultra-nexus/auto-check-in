@@ -1,0 +1,37 @@
+name: CF Click Probe (temp)
+on: push
+
+# 一次性探测：真实点击（trusted user-activation）能否让 CI runner 过 plugin.php。
+# 判定证据 = 从 CDP performance log 里读出的 plugin.php 实际响应状态码。
+# 凭据从 SITE_CONFIGS Secret 解出；脚本只打印布尔值与状态码，不打印用户名/密码/cookie。
+# 探测完随分支删除。
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SITE_CONFIGS: ${{ secrets.SITE_CONFIGS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.2"
+
+      - name: Browser versions on the runner
+        run: |
+          google-chrome --version || true
+          chromedriver --version || true
+          command -v xvfb-run || true
+
+      - name: Probe (headless)
+        continue-on-error: true
+        run: uv run --with selenium python -I probe_click.py
+
+      - name: Probe (headed under Xvfb)
+        continue-on-error: true
+        run: xvfb-run -a --server-args="-screen 0 1440x900x24" uv run --with selenium python -I probe_click.py --headed

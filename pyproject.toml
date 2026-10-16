@@ -9,7 +9,9 @@ requires-python = ">=3.12"
 readme = "README.md"
 dependencies = [
     "lxml>=6.1.1",
+    "pyyaml>=6.0",
     "requests>=2.34.2",
+    "selenium>=4.30",
     "urllib3>=2.7.0",
 ]
 

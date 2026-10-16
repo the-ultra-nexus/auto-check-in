@@ -34,7 +34,7 @@ enabled = true
 
 # 每个站点一段；新增站点先注册适配器，再补充对应配置节
 [sites.sijishe]
-adapter = "sijishe"                 # 适配器名（SITE_SIJISHE_ADAPTER 覆盖）
+adapter = "sijishe-browser"         # 适配器名（SITE_SIJISHE_ADAPTER 覆盖）
 # base_url = "https://xsijishe.net"  # 非敏感默认值；推荐由 SITE_SIJISHE_BASE_URL 提供
 sign_path = "/k_misign-sign.html"   # 签到页路径
 
@@ -49,10 +49,8 @@ request_timeout_seconds = 15   # 单请求超时（CHECK_IN_REQUEST_TIMEOUT）
 retries = 3                    # 业务重试次数（CHECK_IN_RETRIES）
 retry_delay_seconds = 3.0      # 重试间隔秒（CHECK_IN_RETRY_DELAY）
 request_delay_seconds = 3.0    # 站点内账号间隔秒，0 关闭（CHECK_IN_REQUEST_DELAY）
-# 代理池（可选，只走环境变量，禁止写入本文件）：
-#   CHECK_IN_PROXY_POOL_URLS    IP 池 URL，逗号分隔多个（如 https://.../data.txt）
-# 按需分批补给（直连优先）：首个站点请求先直连（短超时预算），失败才拉批
-# （并行粗探、凑满 5 个可用即停），批次按站点隔离，耗尽再取下一批（最多 5 批）；
-# 池为空或失败时直连。仅作用于站点登录/签到流量，通知渠道不受影响；日志脱敏
-# 站点级开关 direct_first（默认 true）走 SITE_CONFIGS 每站点字段或 SITE_<NAME>_DIRECT_FIRST
-# 环境变量，禁止写入本文件
+# 浏览器出口代理（可选，只走环境变量，禁止写入本文件）：
+#   CHECK_IN_BROWSER_PROXY        如 http://127.0.0.1:7890
+#   CHECK_IN_PROXY_SUBSCRIPTION   订阅地址，留空用内置公开源
+# CI 里由 `uv run python -m auto_check_in.proxy_setup` 起本地 mihomo 并选定节点；
+# 直连时 runner 的机房 IP 会被 Cloudflare 质询拦下。仅作用于站点流量，通知渠道不受影响
