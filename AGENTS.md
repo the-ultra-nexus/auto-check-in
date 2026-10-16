@@ -24,7 +24,7 @@ cli.main → runner.run → _run_site → adapter.run(account)
 | `auto_check_in/browser.py` | Chrome 工厂，可选 `--proxy-server` |
 | `auto_check_in/proxy_setup.py` | 起本地 mihomo，按顺序回退拉订阅、并行测速选节点 |
 | `auto_check_in/adapters/sijishe_browser.py` | 司机社浏览器适配器 |
-| `auto_check_in/discuz.py` | Discuz 通用解析（formhash、登录弹框、响应分类） |
+| `auto_check_in/discuz.py` | Discuz 通用解析（formhash、响应分类；弹框工具供 HTTP 适配器用） |
 | `auto_check_in/session.py` | cookie 缓存读写 |
 | `auto_check_in/security.py` | 脱敏（含 `cf_clearance`） |
 
@@ -84,7 +84,8 @@ uv run python -m compileall auto_check_in tests
   测出来的结论本身就无效。
 - `adapters/sijishe.py`：纯 HTTP 适配器。过不了 CF。
 - `CHECK_IN_PROXY_POOL_URLS` / `CHECK_IN_PROXY_LIST_FILE` / `direct_first`：
-  随代理池一并移除。
+  随代理池一并移除。`direct_first` 曾是「直连优先」开关，删除前已确认是死配置
+  （只在 `config.py` 解析校验、零消费方）。
 
 ## 历史探测结论（避免重走弯路）
 

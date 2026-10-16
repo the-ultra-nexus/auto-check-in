@@ -68,19 +68,17 @@ Chrome 启动，--proxy-server 指向 127.0.0.1:7890
 加载会话缓存并验证登录态
    │ 有效               │ 无效
    ▼                   ▼
-直接进入签到         登录弹框（解析 formhash/referer/loginhash）
-   │                   │
-   │                   ▼
-   │            登录 POST（密码 MD5）
+直接进入签到         打开完整登录页（非弹框），填表并真实点击提交
    │                   │
    │                   ▼
    │            确认登录态（auth cookie / 签到页结构）
    └───────┬───────────┘
            ▼
-GET 签到页 → 解析 formhash → GET 签到接口
+GET 签到页 → 解析 formhash → 页内 fetch 提交签到接口
            ▼
 响应判定：success / already-checked-in / login-failed / check-in-failed
    │ login-failed → 清 cookie → 重新登录一次 → 再签到
+   │ 被 CF 拦下（质询不过 / 页面挂死）→ 换节点 → 重跑整条流程（最多 4 次）
    ▼
 保存会话缓存 → 汇总 → 通知 → 退出码（0/1/2）
 ```
@@ -131,8 +129,9 @@ uv run python -m auto_check_in.proxy_setup
 | 3 | [`snakem982/proxypool`](https://github.com/snakem982/proxypool) | 持续 |
 
 三者均已在 2026-10-16 用真实浏览器实测通过目标站点（拿到 `formhash`、未被质询）。
-设置了 `CHECK_IN_PROXY_SUBSCRIPTION` 则只用该源，不走回退。日志里 `已选定节点 #N/M（订阅源 i/j）`
-标明命中的是第几个源——若长期固定命中第三个，说明前两个已失效，该换源了。
+设置了 `CHECK_IN_PROXY_SUBSCRIPTION` 则只用该源，不走回退。日志里
+`已选定节点 <名字> 延迟 <ms>ms（订阅源 i/j，共 N 节点）` 标明命中的是第几个源与节点延迟
+——若长期固定命中第三个，说明前两个已失效，该换源了。
 
 ### 判定页面状态
 
@@ -143,8 +142,9 @@ uv run python -m auto_check_in.proxy_setup
 
 | 失败信号 | 含义 | 处理 |
 | --- | --- | --- |
-| 签到页 title 含 `Just a moment` 且超时 | 质询未过 | 该账号 `check-in-failed` |
+| 签到/登录页 title 含 `Just a moment` 且 15s 内未过，或页面加载超时 | 当前出口被 CF 拦下 | **换节点重试**（最多 4 次，已试过的节点排除）；全部失败才 `error` |
 | 页面 200 但未登录/无 formhash/签到返回 `login-failed` | 会话层：cookie 失效 | 清 cookie 重新登录一次（复用同一浏览器） |
+| 签到接口返回「您所在用户组不允许使用」等未登录响应 | 缓存的 `*_auth` 已失效 | 归类为 `login-failed` → 清 cookie 重登 |
 
 ## 环境变量
 
@@ -339,9 +339,9 @@ GitHub Actions 使用时，把对应值配置为仓库 Secret，并在工作流 
 
 ## 扩展其他站点
 
-新增站点时实现 `CheckInAdapter` 协议（`run(account) -> AccountResult`），在 `auto_check_in/adapters/__init__.py` 的 `ADAPTERS` 注册，配置 `[runtime] enabled_sites` 与 `SITE_<NAME>_*` 环境变量即可。运行器、结果模型、通知和 CLI 无需修改；测试可复用 `tests/helpers.py` 的 fixture（FakeSession、HTML/XML 样例等），并参考 `tests/test_sijishe.py` 为每个站点建立 `tests/test_<站点>.py`。
+新增站点时实现 `CheckInAdapter` 协议（`run(account) -> AccountResult`），在 `auto_check_in/adapters/__init__.py` 的 `ADAPTERS` 注册，配置 `[runtime] enabled_sites` 与 `SITE_<NAME>_*` 环境变量即可。运行器、结果模型、通知和 CLI 无需修改；测试可复用 `tests/helpers.py` 的 fixture（`FakeDriver`、`make_site_config` 与 HTML/XML 样例等），并参考 `tests/test_sijishe_browser.py` 为每个站点建立 `tests/test_<站点>.py`。
 
-可复用的共用模块：Discuz 系站点的弹框解析、formhash 提取和响应分类在 `auto_check_in/discuz.py`；随机 UA 池在 `auto_check_in/http.py`；错误类型在 `auto_check_in/errors.py`；会话缓存与脱敏分别在 `auto_check_in/session.py`、`auto_check_in/security.py`。
+可复用的共用模块：Discuz 系站点的 formhash 提取与响应分类在 `auto_check_in/discuz.py`（该模块还含 `parse_login_dialog`/`md5_password` 两个登录弹框工具，供纯 HTTP 适配器使用，浏览器适配器走完整登录页、不用它们）；随机 UA 池在 `auto_check_in/http.py`；错误类型在 `auto_check_in/errors.py`；会话缓存与脱敏分别在 `auto_check_in/session.py`、`auto_check_in/security.py`。
 
 ## 验证
 

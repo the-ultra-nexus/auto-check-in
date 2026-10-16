@@ -46,7 +46,6 @@ class SiteConfig:
     accounts: str
     sign_path: str = "/k_misign-sign.html"
     network: NetworkConfig = NetworkConfig()
-    direct_first: bool = True
     session_cache: bool = True
     session_dir: Path = Path(".runtime/sessions")
     session_max_age_seconds: float = 0.0
@@ -261,16 +260,7 @@ def load_config(
             )
             site_network_raw = section.get("network", {}) if isinstance(section.get("network"), dict) else {}
             _warn_unknown(f"sites.{name}.network", site_network_raw, _NETWORK_KEYS)
-            if "direct_first" in section:
-                raise ConfigError(
-                    f"站点 {name} 的 direct_first 不允许写入配置文件（检测到 sites.{name}.direct_first），"
-                    f"请使用 {prefix}DIRECT_FIRST 环境变量或 SITE_CONFIGS 的 direct_first 字段提供"
-                )
             merged_network = {**global_network_raw, **site_network_raw}
-            direct_first = _bool(
-                _env(env, f"{prefix}DIRECT_FIRST", str(json_cfg.get("direct_first", True))),
-                f"{prefix}DIRECT_FIRST",
-            )
             sites.append(
                 SiteConfig(
                     name=name,
@@ -279,7 +269,6 @@ def load_config(
                     accounts=accounts,
                     sign_path=sign_path,
                     network=_network_from(merged_network, env),
-                    direct_first=direct_first,
                     session_cache=session_cache,
                     session_dir=session_dir,
                     session_max_age_seconds=session_max_age_seconds,

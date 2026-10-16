@@ -257,62 +257,6 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(config.sites[0].network.proxy_url, "http://127.0.0.1:7890")
 
-    def test_direct_first_default_true(self):
-        path = write_config("")
-        config = load_config(
-            path,
-            {
-                "CHECK_IN_SITES": "sijishe",
-                "SITE_SIJISHE_BASE_URL": "https://a.example",
-                "SITE_SIJISHE_ACCOUNTS": "u&p",
-            },
-        )
-        self.assertTrue(config.sites[0].direct_first)
-
-    def test_direct_first_from_site_configs(self):
-        path = write_config("")
-        config = load_config(
-            path,
-            {
-                "SITE_CONFIGS": json.dumps(
-                    {
-                        "sijishe": {
-                            "base_url": "https://a.example",
-                            "accounts": "u&p",
-                            "direct_first": False,
-                        }
-                    }
-                )
-            },
-        )
-        self.assertFalse(config.sites[0].direct_first)
-
-    def test_direct_first_env_overrides_site_configs(self):
-        path = write_config("")
-        config = load_config(
-            path,
-            {
-                "SITE_CONFIGS": json.dumps(
-                    {"sijishe": {"base_url": "https://a.example", "accounts": "u&p", "direct_first": False}}
-                ),
-                "SITE_SIJISHE_DIRECT_FIRST": "true",
-            },
-        )
-        self.assertTrue(config.sites[0].direct_first)
-
-    def test_direct_first_in_toml_rejected(self):
-        path = write_config(
-            "[sites.sijishe]\nbase_url = 'https://a.example'\ndirect_first = false\n"
-        )
-        with self.assertRaises(ConfigError):
-            load_config(
-                path,
-                {
-                    "CHECK_IN_SITES": "sijishe",
-                    "SITE_SIJISHE_ACCOUNTS": "u&p",
-                },
-            )
-
     def test_invalid_browser_proxy_rejected(self):
         path = write_config("")
         with self.assertRaises(ConfigError):
